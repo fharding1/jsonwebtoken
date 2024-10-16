@@ -64,6 +64,15 @@ pub struct Header {
     #[serde(skip_serializing_if = "Option::is_none")]
     #[serde(rename = "x5t#S256")]
     pub x5t_s256: Option<String>,
+
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub commitment: Option<String>,
+
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub message: Option<String>,
+
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub proofs: Option<Vec<(String, String)>>
 }
 
 impl Header {
@@ -80,6 +89,9 @@ impl Header {
             x5c: None,
             x5t: None,
             x5t_s256: None,
+            commitment: None,
+            message: None,
+            proofs: None,
         }
     }
 

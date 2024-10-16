@@ -119,7 +119,8 @@ impl EncodingKey {
 /// let token = encode(&Header::default(), &my_claims, &EncodingKey::from_secret("secret".as_ref())).unwrap();
 /// ```
 pub fn encode<T: Serialize>(header: &Header, claims: &T, key: &EncodingKey) -> Result<String> {
-    if key.family != header.alg.family() {
+    if key.family != header.alg.family() || header.alg.family() == AlgorithmFamily::Acl || key.family == AlgorithmFamily::Acl {
+        // TODO: should have two kinds of errors here prolly
         return Err(new_error(ErrorKind::InvalidAlgorithm));
     }
     let encoded_header = b64_encode_part(header)?;
@@ -128,4 +129,18 @@ pub fn encode<T: Serialize>(header: &Header, claims: &T, key: &EncodingKey) -> R
     let signature = crypto::sign(message.as_bytes(), key, header.alg)?;
 
     Ok([message, signature].join("."))
+}
+
+pub fn encode_acl<T: Serialize, Q: Serialize>(header: &Header, claims: &T, acl_signature: &Q) -> Result<String> {
+    if header.alg.family() != AlgorithmFamily::Acl {
+        return Err(new_error(ErrorKind::InvalidAlgorithm));
+    }
+
+    let encoded_header = b64_encode_part(header)?;
+    let encoded_claims = b64_encode_part(claims)?;
+    let encoded_sig = b64_encode_part(acl_signature)?;
+
+    let message = [encoded_header, encoded_claims].join(".");
+
+    Ok([message, encoded_sig].join("."))
 }
