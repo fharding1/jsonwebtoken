@@ -1,8 +1,9 @@
 use base64::{engine::general_purpose::STANDARD, Engine};
 use serde::de::DeserializeOwned;
+use acl::VerifyingKey;
 
 use crate::algorithms::AlgorithmFamily;
-use crate::crypto::verify;
+use crate::crypto::{verify,verify_acl};
 use crate::errors::{new_error, ErrorKind, Result};
 use crate::header::Header;
 use crate::jwk::{AlgorithmParameters, Jwk};
@@ -45,6 +46,7 @@ macro_rules! expect_two {
 pub(crate) enum DecodingKeyKind {
     SecretOrDer(Vec<u8>),
     RsaModulusExponent { n: Vec<u8>, e: Vec<u8> },
+    AclVerifyingKey(VerifyingKey),
 }
 
 /// All the different kind of keys we can use to decode a JWT.
@@ -56,6 +58,13 @@ pub struct DecodingKey {
 }
 
 impl DecodingKey {
+    pub fn from_acl_vk(vk: VerifyingKey) -> Self {
+        DecodingKey {
+            family: AlgorithmFamily::Acl,
+            kind: DecodingKeyKind::AclVerifyingKey(vk),
+        }
+    }
+
     /// If you're using HMAC, use this.
     pub fn from_secret(secret: &[u8]) -> Self {
         DecodingKey {
@@ -197,6 +206,7 @@ impl DecodingKey {
         match &self.kind {
             DecodingKeyKind::SecretOrDer(b) => b,
             DecodingKeyKind::RsaModulusExponent { .. } => unreachable!(),
+            DecodingKeyKind::AclVerifyingKey(_) => unreachable!(),
         }
     }
 }
@@ -227,6 +237,10 @@ fn verify_signature<'a>(
 
     if validation.validate_signature && !validation.algorithms.contains(&header.alg) {
         return Err(new_error(ErrorKind::InvalidAlgorithm));
+    }
+
+    if validation.validate_signature && header.alg.family() == AlgorithmFamily::Acl && !verify_acl(signature, message.as_bytes(), key, &header)? {
+        return Err(new_error(ErrorKind::InvalidSignature));
     }
 
     if validation.validate_signature && !verify(signature, message.as_bytes(), key, header.alg)? {

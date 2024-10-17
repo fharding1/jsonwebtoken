@@ -1,7 +1,8 @@
 use std::result;
 
-use base64::{engine::general_purpose::STANDARD, Engine};
+use base64::{engine::general_purpose::{STANDARD,URL_SAFE_NO_PAD}, Engine};
 use serde::{Deserialize, Serialize};
+use acl::{BlindedCommitment};
 
 use crate::algorithms::Algorithm;
 use crate::errors::Result;
@@ -69,7 +70,7 @@ pub struct Header {
     pub commitment: Option<String>,
 
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub message: Option<String>,
+    pub hashed_message: Option<String>,
 
     #[serde(skip_serializing_if = "Option::is_none")]
     pub proofs: Option<Vec<(String, String)>>
@@ -90,9 +91,16 @@ impl Header {
             x5t: None,
             x5t_s256: None,
             commitment: None,
-            message: None,
+            hashed_message: None,
             proofs: None,
         }
+    }
+
+    pub fn new_acl<const N: usize>(commitment: BlindedCommitment<N>, hashed_message: &[u8; 64]) -> Header {
+        let mut header = Header::new(Algorithm::AclR255);
+        header.commitment = Some(URL_SAFE_NO_PAD.encode(commitment.to_bytes()));
+        header.hashed_message = Some(URL_SAFE_NO_PAD.encode(&[0u8; 64]));
+        header
     }
 
     /// Converts an encoded part into the Header struct if possible

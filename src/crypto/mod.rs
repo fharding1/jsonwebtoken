@@ -6,6 +6,7 @@ use crate::decoding::{DecodingKey, DecodingKeyKind};
 use crate::encoding::EncodingKey;
 use crate::errors::Result;
 use crate::serialization::{b64_decode, b64_encode};
+use crate::header::Header;
 
 pub(crate) mod ecdsa;
 pub(crate) mod eddsa;
@@ -40,6 +41,8 @@ pub fn sign(message: &[u8], key: &EncodingKey, algorithm: Algorithm) -> Result<S
         | Algorithm::PS256
         | Algorithm::PS384
         | Algorithm::PS512 => rsa::sign(rsa::alg_to_rsa_signing(algorithm), key.inner(), message),
+
+        Algorithm::AclR255 => unreachable!("you should not invoke sign with the acl algorithm"),
     }
 }
 
@@ -55,6 +58,15 @@ fn verify_ring(
     let res = public_key.verify(message, &signature_bytes);
 
     Ok(res.is_ok())
+}
+
+pub fn verify_acl(
+    signature: &str,
+    message: &[u8],
+    key: &DecodingKey,
+    header: &Header,
+) -> Result<bool> {
+    Ok(false)
 }
 
 /// Compares the signature given with a re-computed signature for HMAC or using the public key
@@ -101,7 +113,10 @@ pub fn verify(
                 DecodingKeyKind::RsaModulusExponent { n, e } => {
                     rsa::verify_from_components(alg, signature, message, (n, e))
                 }
+                DecodingKeyKind::AclVerifyingKey(_) => unreachable!("you should not verify an RSA signature with an ACL verifying key"),
             }
         }
+
+        Algorithm::AclR255 => unreachable!("you should not invoke verify with the acl algorithm"),
     }
 }

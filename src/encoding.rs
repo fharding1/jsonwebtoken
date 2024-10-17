@@ -136,6 +136,11 @@ pub fn encode_acl<T: Serialize, Q: Serialize>(header: &Header, claims: &T, acl_s
         return Err(new_error(ErrorKind::InvalidAlgorithm));
     }
 
+    if header.commitment.is_none() {
+        // todo: return the right type of error here
+        return Err(new_error(ErrorKind::InvalidAlgorithm));
+    }
+
     let encoded_header = b64_encode_part(header)?;
     let encoded_claims = b64_encode_part(claims)?;
     let encoded_sig = b64_encode_part(acl_signature)?;
