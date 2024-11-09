@@ -106,9 +106,11 @@ pub struct Validation {
 
     /// Whether to validate the JWT signature. Very insecure to turn that off
     pub(crate) validate_signature: bool,
+
+    pub
 }
 
-impl Validation {
+imp Validation {
     /// Create a default validation setup allowing the given alg
     pub fn new(alg: Algorithm) -> Validation {
         let mut required_claims = HashSet::with_capacity(1);
