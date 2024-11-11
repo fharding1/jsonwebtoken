@@ -5,8 +5,8 @@ use crate::algorithms::Algorithm;
 use crate::decoding::{DecodingKey, DecodingKeyKind};
 use crate::encoding::EncodingKey;
 use crate::errors::Result;
-use crate::serialization::{b64_decode, b64_encode};
 use crate::header::Header;
+use crate::serialization::{b64_decode, b64_encode};
 
 pub(crate) mod ecdsa;
 pub(crate) mod eddsa;
@@ -113,7 +113,9 @@ pub fn verify(
                 DecodingKeyKind::RsaModulusExponent { n, e } => {
                     rsa::verify_from_components(alg, signature, message, (n, e))
                 }
-                DecodingKeyKind::AclVerifyingKey(_) => unreachable!("you should not verify an RSA signature with an ACL verifying key"),
+                DecodingKeyKind::AclVerifyingKey(_) => {
+                    unreachable!("you should not verify an RSA signature with an ACL verifying key")
+                }
             }
         }
 

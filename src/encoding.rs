@@ -119,7 +119,10 @@ impl EncodingKey {
 /// let token = encode(&Header::default(), &my_claims, &EncodingKey::from_secret("secret".as_ref())).unwrap();
 /// ```
 pub fn encode<T: Serialize>(header: &Header, claims: &T, key: &EncodingKey) -> Result<String> {
-    if key.family != header.alg.family() || header.alg.family() == AlgorithmFamily::Acl || key.family == AlgorithmFamily::Acl {
+    if key.family != header.alg.family()
+        || header.alg.family() == AlgorithmFamily::Acl
+        || key.family == AlgorithmFamily::Acl
+    {
         // TODO: should have two kinds of errors here prolly
         return Err(new_error(ErrorKind::InvalidAlgorithm));
     }
@@ -131,7 +134,11 @@ pub fn encode<T: Serialize>(header: &Header, claims: &T, key: &EncodingKey) -> R
     Ok([message, signature].join("."))
 }
 
-pub fn encode_acl<T: Serialize, Q: Serialize>(header: &Header, claims: &T, acl_signature: &Q) -> Result<String> {
+pub fn encode_acl<T: Serialize, Q: Serialize>(
+    header: &Header,
+    claims: &T,
+    acl_signature: &Q,
+) -> Result<String> {
     if header.alg.family() != AlgorithmFamily::Acl {
         return Err(new_error(ErrorKind::InvalidAlgorithm));
     }

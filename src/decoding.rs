@@ -1,9 +1,9 @@
+use acl::VerifyingKey;
 use base64::{engine::general_purpose::STANDARD, Engine};
 use serde::de::DeserializeOwned;
-use acl::VerifyingKey;
 
 use crate::algorithms::AlgorithmFamily;
-use crate::crypto::{verify,verify_acl};
+use crate::crypto::{verify, verify_acl};
 use crate::errors::{new_error, ErrorKind, Result};
 use crate::header::Header;
 use crate::jwk::{AlgorithmParameters, Jwk};
@@ -59,10 +59,7 @@ pub struct DecodingKey {
 
 impl DecodingKey {
     pub fn from_acl_vk(vk: VerifyingKey) -> Self {
-        DecodingKey {
-            family: AlgorithmFamily::Acl,
-            kind: DecodingKeyKind::AclVerifyingKey(vk),
-        }
+        DecodingKey { family: AlgorithmFamily::Acl, kind: DecodingKeyKind::AclVerifyingKey(vk) }
     }
 
     /// If you're using HMAC, use this.
@@ -239,7 +236,10 @@ fn verify_signature<'a>(
         return Err(new_error(ErrorKind::InvalidAlgorithm));
     }
 
-    if validation.validate_signature && header.alg.family() == AlgorithmFamily::Acl && !verify_acl(signature, message.as_bytes(), key, &header)? {
+    if validation.validate_signature
+        && header.alg.family() == AlgorithmFamily::Acl
+        && !verify_acl(signature, message.as_bytes(), key, &header)?
+    {
         return Err(new_error(ErrorKind::InvalidSignature));
     }
 
