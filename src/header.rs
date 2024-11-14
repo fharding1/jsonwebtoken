@@ -1,6 +1,5 @@
 use std::result;
 
-use acl::BlindedCommitment;
 use base64::{
     engine::general_purpose::{STANDARD, URL_SAFE_NO_PAD},
     Engine,
@@ -95,13 +94,13 @@ impl Header {
         }
     }
 
-    pub fn new_acl<const N: usize>(
-        commitment: BlindedCommitment<N>,
-        hashed_message: &[u8; 64],
+    pub fn new_acl(
+        commitment: &[u8],
+        hashed_message: &[u8],
     ) -> Header {
         let mut header = Header::new(Algorithm::AclR255);
-        header.commitment = Some(URL_SAFE_NO_PAD.encode(commitment.to_bytes()));
-        header.hashed_message = Some(URL_SAFE_NO_PAD.encode(&[0u8; 64]));
+        header.commitment = Some(URL_SAFE_NO_PAD.encode(commitment));
+        header.hashed_message = Some(URL_SAFE_NO_PAD.encode(hashed_message));
         header
     }
 
