@@ -7,7 +7,7 @@ use ring::signature::{Ed25519KeyPair, KeyPair};
 use serde::{Deserialize, Serialize};
 
 use acl::{
-    commit, SigningKey, UserParameters, VerifyingKey, ATTRIBUTE_ID_LENGTH, SECRET_KEY_LENGTH,
+    SigningKey, UserParameters, VerifyingKey, SECRET_KEY_LENGTH,
 };
 use curve25519_dalek::ristretto::RistrettoPoint;
 use curve25519_dalek::scalar::Scalar;
@@ -55,23 +55,19 @@ fn main() {
 
     let signing_key: SigningKey = SigningKey::from_bytes(&secret_key_bytes);
 
-    let (ss, msg) = signing_key.prepare(&[0u8; 32]).expect("this should fail");
-    let presig = signing_key.compute_presignature(&ss, &[0u8; 32]);
-
     let bob = UserAttributes { user_id: 1, user_type: UserType::Subscriber };
 
     let attribute_ids = [UserAttributeID::UserID.as_bytes(), UserAttributeID::Type.as_bytes()];
 
-    let commitment = commit(&mut OsRng, attribute_ids, [bob.user_id, bob.user_type as u128]);
+    let commitment = RistrettoPoint::mul_base(&Scalar::from(1 as u32));
+    //let commitment = commit(&mut OsRng, attribute_ids, [bob.user_id, bob.user_type as u128]);
 
-    println!("commitment : {:?}", RistrettoPoint::from(&commitment));
+    println!("commitment : {:?}", commitment);
 
-    let commit_bytes = commitment.to_bytes();
-
-    let (ss, prepare_message) = signing_key.prepare(&commit_bytes).expect("this should work");
+    let (ss, prepare_message) = signing_key.prepare(&commitment).expect("this should work");
 
     let user_params =
-        UserParameters::<2> { key: VerifyingKey::from(&signing_key), attribute_ids: attribute_ids };
+        UserParameters { key: VerifyingKey::from(&signing_key) };
 
     let (us, challenge) = user_params
         .compute_challenge(&mut OsRng, &commitment, &[0u8; 64], &prepare_message)
@@ -79,19 +75,19 @@ fn main() {
 
     let presignature = signing_key.compute_presignature(&ss, &challenge).expect("should work");
 
-    let (signature, blinded_commitment) =
+    let (signature, blinded_commitment, gamma, rnd) =
         user_params.compute_signature(&us, &presignature).expect("sig should be fine");
 
     println!(
         "valid: {:?}",
-        user_params.key.verify_prehashed(&[0u8; 64], &blinded_commitment.to_bytes(), &signature)
+        user_params.key.verify_prehashed(&[0u8; 64], &blinded_commitment, &signature)
     );
     println!(
         "valid: {:?}",
-        user_params.key.verify_prehashed(&[1u8; 64], &blinded_commitment.to_bytes(), &signature)
+        user_params.key.verify_prehashed(&[1u8; 64], &blinded_commitment, &signature)
     );
 
-    let header = jsonwebtoken::Header::new_acl::<2>(blinded_commitment, &[0u8; 64]);
+    let header = jsonwebtoken::Header::new_acl(&blinded_commitment, &[0u8; 64]);
     let claims = Claims {};
     let token = encode_acl(&header, &claims, &signature).unwrap();
 

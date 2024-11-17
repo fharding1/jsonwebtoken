@@ -1,5 +1,7 @@
 use std::result;
 
+use curve25519_dalek::ristretto::RistrettoPoint;
+
 use base64::{
     engine::general_purpose::{STANDARD, URL_SAFE_NO_PAD},
     Engine,
@@ -95,11 +97,11 @@ impl Header {
     }
 
     pub fn new_acl(
-        commitment: &[u8],
+        commitment: &RistrettoPoint,
         hashed_message: &[u8],
     ) -> Header {
         let mut header = Header::new(Algorithm::AclR255);
-        header.commitment = Some(URL_SAFE_NO_PAD.encode(commitment));
+        header.commitment = Some(URL_SAFE_NO_PAD.encode(commitment.compress().to_bytes()));
         header.hashed_message = Some(URL_SAFE_NO_PAD.encode(hashed_message));
         header
     }
