@@ -1,4 +1,6 @@
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
+use chrono::prelude::*;
+use chrono::TimeDelta;
 use jsonwebtoken::{
     decode, encode, encode_acl, get_current_timestamp, Algorithm, DecodingKey, EncodingKey, Header,
     Validation,
@@ -17,7 +19,10 @@ use rand_core::OsRng;
 use sha2::Sha512;
 
 #[derive(Debug, Serialize, Deserialize)]
-pub struct Claims {}
+pub struct Claims {
+    test: String,
+    exp: u64,
+}
 
 #[derive(Copy, Clone, Debug)]
 #[repr(u8)]
@@ -88,7 +93,9 @@ fn main() {
     );
 
     let header = jsonwebtoken::Header::new_acl(&blinded_commitment, &[0u8; 64]);
-    let claims = Claims {};
+    let now = Utc::now();
+    let exp = Utc.with_ymd_and_hms(now.year(), now.month(), now.day(), 0,0,0).latest().expect("fine") + TimeDelta::days(1);
+    let claims = Claims {test: String::from("Hello, World!"), exp: exp.timestamp() as u64 };
     let token = encode_acl(&header, &claims, &signature).unwrap();
 
     println!("token: {:?}", token);
