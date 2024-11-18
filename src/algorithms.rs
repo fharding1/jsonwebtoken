@@ -45,8 +45,10 @@ pub enum Algorithm {
     /// Edwards-curve Digital Signature Algorithm (EdDSA)
     EdDSA,
 
-    /// Anonymous Credentials Light using Ristretto255 and SHA512
-    AclR255,
+    /// Anonymous Credentials Light (ACL) where issuance requires the user to fully disclose all
+    /// attributes and verification requires the user to provide a selective disclosure proof for
+    /// *any* claims present in the payload.
+    AclFullPartialR255,
 }
 
 impl FromStr for Algorithm {
@@ -65,7 +67,7 @@ impl FromStr for Algorithm {
             "PS512" => Ok(Algorithm::PS512),
             "RS512" => Ok(Algorithm::RS512),
             "EdDSA" => Ok(Algorithm::EdDSA),
-            "AclR255" => Ok(Algorithm::AclR255),
+            "AclFPR255" => Ok(Algorithm::AclR255),
             _ => Err(ErrorKind::InvalidAlgorithmName.into()),
         }
     }
@@ -83,7 +85,7 @@ impl Algorithm {
             | Algorithm::PS512 => AlgorithmFamily::Rsa,
             Algorithm::ES256 | Algorithm::ES384 => AlgorithmFamily::Ec,
             Algorithm::EdDSA => AlgorithmFamily::Ed,
-            Algorithm::AclR255 => AlgorithmFamily::Acl,
+            Algorithm::AclFPR255 => AlgorithmFamily::Acl,
         }
     }
 }
@@ -106,7 +108,7 @@ mod tests {
         assert!(Algorithm::from_str("PS256").is_ok());
         assert!(Algorithm::from_str("PS384").is_ok());
         assert!(Algorithm::from_str("PS512").is_ok());
-        assert!(Algorithm::from_str("AclR255").is_ok());
+        assert!(Algorithm::from_str("AclFPR255").is_ok());
         assert!(Algorithm::from_str("").is_err());
     }
 }

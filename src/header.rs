@@ -74,7 +74,7 @@ pub struct Header {
     pub commitment: Option<String>,
 
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub hashed_message: Option<String>,
+    pub proofs: Option<Vec<String>>,
 }
 
 impl Header {

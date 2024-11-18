@@ -2,6 +2,7 @@ use base64::{engine::general_purpose::STANDARD, Engine};
 use serde::ser::Serialize;
 
 use crate::algorithms::AlgorithmFamily;
+use crate::okamoto::{prove_linear, prove_dleq};
 use crate::crypto;
 use crate::errors::{new_error, ErrorKind, Result};
 use crate::header::Header;
@@ -134,10 +135,17 @@ pub fn encode<T: Serialize>(header: &Header, claims: &T, key: &EncodingKey) -> R
     Ok([message, signature].join("."))
 }
 
+pub trait SignatureProvider {
+    type Error;
+
+    fn prepare(&self, commitment: &RistrettoPoint, aux: &[u8]) -> Result<&[u8], Error>;
+    fn compute_presignature(&self, challenge_bytes: &[u8]) -> Result<&[u8], Error>;
+}
+
 pub fn encode_acl<T: Serialize, Q: Serialize>(
     header: &Header,
     claims: &T,
-    acl_signature: &Q,
+    pvd: &impl SignatureProvider,
 ) -> Result<String> {
     if header.alg.family() != AlgorithmFamily::Acl {
         return Err(new_error(ErrorKind::InvalidAlgorithm));
@@ -147,6 +155,12 @@ pub fn encode_acl<T: Serialize, Q: Serialize>(
         // todo: return the right type of error here
         return Err(new_error(ErrorKind::InvalidAlgorithm));
     }
+
+    let mut aux: Vec<u8> = match header.alg {
+        Algorithm::AclFullPartialR255 => {
+
+        },
+    };
 
     let encoded_header = b64_encode_part(header)?;
     let encoded_claims = b64_encode_part(claims)?;
