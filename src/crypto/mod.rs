@@ -42,7 +42,9 @@ pub fn sign(message: &[u8], key: &EncodingKey, algorithm: Algorithm) -> Result<S
         | Algorithm::PS384
         | Algorithm::PS512 => rsa::sign(rsa::alg_to_rsa_signing(algorithm), key.inner(), message),
 
-        Algorithm::AclR255 => unreachable!("you should not invoke sign with the acl algorithm"),
+        Algorithm::AclFullPartialR255 => {
+            unreachable!("you should not invoke sign with the acl algorithm")
+        }
     }
 }
 
@@ -119,6 +121,8 @@ pub fn verify(
             }
         }
 
-        Algorithm::AclR255 => unreachable!("you should not invoke verify with the acl algorithm"),
+        Algorithm::AclFullPartialR255 => {
+            unreachable!("you should not invoke verify with the acl algorithm")
+        }
     }
 }

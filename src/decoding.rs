@@ -243,7 +243,10 @@ fn verify_signature<'a>(
         return Err(new_error(ErrorKind::InvalidSignature));
     }
 
-    if validation.validate_signature && header.alg.family() != AlgorithmFamily::Acl && !verify(signature, message.as_bytes(), key, header.alg)? {
+    if validation.validate_signature
+        && header.alg.family() != AlgorithmFamily::Acl
+        && !verify(signature, message.as_bytes(), key, header.alg)?
+    {
         return Err(new_error(ErrorKind::InvalidSignature));
     }
 

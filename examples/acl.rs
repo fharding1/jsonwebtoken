@@ -8,9 +8,7 @@ use jsonwebtoken::{
 use ring::signature::{Ed25519KeyPair, KeyPair};
 use serde::{Deserialize, Serialize};
 
-use acl::{
-    SigningKey, UserParameters, VerifyingKey, SECRET_KEY_LENGTH,
-};
+use acl::{SigningKey, UserParameters, VerifyingKey, SECRET_KEY_LENGTH};
 use curve25519_dalek::ristretto::RistrettoPoint;
 use curve25519_dalek::scalar::Scalar;
 
@@ -53,6 +51,7 @@ impl UserAttributeID {
 }
 
 fn main() {
+    /*
     let secret_key_bytes: [u8; SECRET_KEY_LENGTH] = [
         157, 097, 177, 157, 239, 253, 090, 096, 186, 132, 074, 244, 146, 236, 044, 196, 068, 073,
         197, 105, 123, 050, 105, 025, 112, 059, 172, 003, 028, 174, 127, 096,
@@ -123,5 +122,6 @@ fn main() {
     let validation = Validation::new(Algorithm::EdDSA);
     let _token_data = decode::<Claims>(&token, &decoding_key, &validation).unwrap();
 
+    */
     */
 }

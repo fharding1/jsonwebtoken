@@ -67,7 +67,7 @@ impl FromStr for Algorithm {
             "PS512" => Ok(Algorithm::PS512),
             "RS512" => Ok(Algorithm::RS512),
             "EdDSA" => Ok(Algorithm::EdDSA),
-            "AclFPR255" => Ok(Algorithm::AclR255),
+            "AclFPR255" => Ok(Algorithm::AclFullPartialR255),
             _ => Err(ErrorKind::InvalidAlgorithmName.into()),
         }
     }
@@ -85,7 +85,7 @@ impl Algorithm {
             | Algorithm::PS512 => AlgorithmFamily::Rsa,
             Algorithm::ES256 | Algorithm::ES384 => AlgorithmFamily::Ec,
             Algorithm::EdDSA => AlgorithmFamily::Ed,
-            Algorithm::AclFPR255 => AlgorithmFamily::Acl,
+            Algorithm::AclFullPartialR255 => AlgorithmFamily::Acl,
         }
     }
 }

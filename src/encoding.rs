@@ -1,14 +1,21 @@
 use base64::{engine::general_purpose::STANDARD, Engine};
 use serde::ser::Serialize;
 
-use crate::algorithms::AlgorithmFamily;
-use crate::okamoto::{prove_linear, prove_dleq};
+use crate::algorithms::{Algorithm, AlgorithmFamily};
 use crate::crypto;
 use crate::errors::{new_error, ErrorKind, Result};
 use crate::header::Header;
 #[cfg(feature = "use_pem")]
 use crate::pem::decoder::PemEncodedKey;
 use crate::serialization::b64_encode_part;
+use curve25519_dalek::ristretto::RistrettoPoint;
+use curve25519_dalek::scalar::Scalar;
+use okamoto::{prove_dleq, prove_linear};
+use acl::{UserParameters};
+
+use std::hash::{DefaultHasher, Hash, Hasher};
+use std::sync::OnceLock;
+use rand_core::{OsRng};
 
 /// A key to encode a JWT with. Can be a secret, a PEM-encoded key or a DER-encoded key.
 /// This key can be re-used so make sure you only initialize it once if you can for better performance.
@@ -136,32 +143,61 @@ pub fn encode<T: Serialize>(header: &Header, claims: &T, key: &EncodingKey) -> R
 }
 
 pub trait SignatureProvider {
-    type Error;
-
-    fn prepare(&self, commitment: &RistrettoPoint, aux: &[u8]) -> Result<&[u8], Error>;
-    fn compute_presignature(&self, challenge_bytes: &[u8]) -> Result<&[u8], Error>;
+    fn prepare(&self, commitment: &RistrettoPoint, aux: String) -> Result<&[u8]>;
+    fn compute_presignature(&self, challenge_bytes: &[u8]) -> Result<&[u8]>;
 }
 
-pub fn encode_acl<T: Serialize, Q: Serialize>(
+pub fn key_to_generator<K: Hash>(prefix: &[u8], key: K) -> RistrettoPoint {
+    let mut hasher = DefaultHasher::new();
+    prefix.hash(&mut hasher);
+    key.hash(&mut hasher);
+    let result = hasher.finish();
+    RistrettoPoint::mul_base(&Scalar::from(result))
+}
+
+// nothing-up-my-sleeve generation of blinding generator as H0=Hash("H0")
+pub fn gen_h0() -> &'static RistrettoPoint {
+    static GENERATOR_H: OnceLock<RistrettoPoint> = OnceLock::new();
+    GENERATOR_H.get_or_init(|| key_to_generator(b"", "H0"))
+}
+
+pub fn encode_acl<K: Eq + Hash>(
     header: &Header,
-    claims: &T,
+    claims: &[(K, [u8; 32])],
+    disclose: &[K],
     pvd: &impl SignatureProvider,
+    params: &UserParameters,
 ) -> Result<String> {
     if header.alg.family() != AlgorithmFamily::Acl {
         return Err(new_error(ErrorKind::InvalidAlgorithm));
     }
 
-    if header.commitment.is_none() {
-        // todo: return the right type of error here
-        return Err(new_error(ErrorKind::InvalidAlgorithm));
-    }
+    let randomness = Scalar::random(&mut OsRng);
+    let commitment = gen_h0() * randomness
+        + claims
+            .into_iter()
+            .map(|(k,v)|
+                key_to_generator(b"claim",k) * Scalar::from_bytes_mod_order(*v)
+            )
+            .sum::<RistrettoPoint>();
 
-    let mut aux: Vec<u8> = match header.alg {
+    let mut aux: String = match header.alg {
         Algorithm::AclFullPartialR255 => {
-
+            // need to prove knowledge of discrete log of C - all disclosed attributes times their
+            // generators
+            b64_encode_part(&prove_linear(&Vec::from([gen_h0().clone()]), &Vec::from([randomness]), &Vec::from([gen_h0() * randomness])).expect("should work")).expect("should encode")
         },
+        _ => todo!("error"),
     };
 
+    let smsg = pvd.prepare(&commitment, aux).expect("asdf");
+    let (st, umsg) = params.compute_challenge(&mut OsRng, &commitment, &[0u8; 64], smsg.try_into().expect("asdf")).expect("asdf");
+    let psig = pvd.compute_presignature(&umsg).expect("asdf");
+    let (sig, blinded_commitment, gamma, rnd) = params.compute_signature(&st, psig.try_into().expect("asdf")).expect("asdf");
+
+    // TODO: encode disclosed claims and add proof for selective disclosure
+
+    /*
     let encoded_header = b64_encode_part(header)?;
     let encoded_claims = b64_encode_part(claims)?;
     let encoded_sig = b64_encode_part(acl_signature)?;
@@ -169,4 +205,6 @@ pub fn encode_acl<T: Serialize, Q: Serialize>(
     let message = [encoded_header, encoded_claims].join(".");
 
     Ok([message, encoded_sig].join("."))
+    */
+    Ok(String::from(""))
 }
