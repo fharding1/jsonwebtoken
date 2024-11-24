@@ -2,8 +2,8 @@ use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
 use chrono::prelude::*;
 use chrono::TimeDelta;
 use jsonwebtoken::{
-    decode, encode, encode_acl, get_current_timestamp, Algorithm, DecodingKey, EncodingKey, Header,
-    Validation,
+    decode, encode, encode_acl, get_current_timestamp, new_local_pvd, Algorithm, DecodingKey,
+    EncodingKey, Header, Validation,
 };
 use ring::signature::{Ed25519KeyPair, KeyPair};
 use serde::{Deserialize, Serialize};
@@ -51,7 +51,6 @@ impl UserAttributeID {
 }
 
 fn main() {
-    /*
     let secret_key_bytes: [u8; SECRET_KEY_LENGTH] = [
         157, 097, 177, 157, 239, 253, 090, 096, 186, 132, 074, 244, 146, 236, 044, 196, 068, 073,
         197, 105, 123, 050, 105, 025, 112, 059, 172, 003, 028, 174, 127, 096,
@@ -59,6 +58,7 @@ fn main() {
 
     let signing_key: SigningKey = SigningKey::from_bytes(&secret_key_bytes);
 
+    /*
     let bob = UserAttributes { user_id: 1, user_type: UserType::Subscriber };
 
     let attribute_ids = [UserAttributeID::UserID.as_bytes(), UserAttributeID::Type.as_bytes()];
@@ -90,14 +90,34 @@ fn main() {
         "valid: {:?}",
         user_params.key.verify_prehashed(&[1u8; 64], &blinded_commitment, &signature)
     );
+    */
 
-    let header = jsonwebtoken::Header::new_acl(&blinded_commitment, &[0u8; 64]);
+    let signing_key: SigningKey = SigningKey::from_bytes(&secret_key_bytes);
+
+    let mut localPVD = new_local_pvd(signing_key);
+
+    println!("{:?}", localPVD);
+
+    let user_params = UserParameters { key: VerifyingKey::from(&signing_key) };
+
     let now = Utc::now();
-    let exp = Utc.with_ymd_and_hms(now.year(), now.month(), now.day(), 0,0,0).latest().expect("fine") + TimeDelta::days(1);
-    let claims = Claims {test: String::from("Hello, World!"), exp: exp.timestamp() as u64 };
-    let token = encode_acl(&header, &claims, &signature).unwrap();
+    let exp =
+        Utc.with_ymd_and_hms(now.year(), now.month(), now.day(), 0, 0, 0).latest().expect("fine")
+            + TimeDelta::days(1);
+    let claims = Claims { test: String::from("Hello, World!"), exp: exp.timestamp() as u64 };
+
+    let token = encode_acl(
+        &Header::new(Algorithm::AclFullPartialR255),
+        &Vec::from([("exp".to_string(), (exp.timestamp() as u64))]),
+        &Vec::from(["exp".to_string()]),
+        &mut localPVD,
+        &user_params,
+    )
+    .unwrap();
 
     println!("token: {:?}", token);
+
+    /*
 
     let decoding_key = DecodingKey::from_acl_vk(VerifyingKey::from(&signing_key));
 
