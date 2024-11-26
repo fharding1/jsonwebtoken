@@ -18,7 +18,7 @@ mod serialization;
 mod validation;
 
 pub use algorithms::Algorithm;
-pub use decoding::{decode, decode_header, DecodingKey, TokenData};
+pub use decoding::{decode, decode_header, DecodingKey, TokenData, decode_acl_selective_disclosure};
 pub use encoding::{encode, encode_acl, new_local_pvd, PreToken, get_acl_pretoken_full_disclosure, EncodingKey, LocalPVD, SignatureProvider};
 pub use header::Header;
 pub use validation::{get_current_timestamp, Validation};

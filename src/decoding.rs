@@ -1,9 +1,12 @@
-use acl::VerifyingKey;
-use base64::{engine::general_purpose::STANDARD, Engine};
+use std::str::FromStr;
+
+use acl::{UserParameters, VerifyingKey,Signature};
+use base64::alphabet::URL_SAFE;
+use base64::{engine::general_purpose::STANDARD, engine::general_purpose::URL_SAFE_NO_PAD, Engine};
 use serde::de::DeserializeOwned;
 
 use crate::algorithms::AlgorithmFamily;
-use crate::crypto::{verify, verify_acl};
+use crate::crypto::{verify};
 use crate::errors::{new_error, ErrorKind, Result};
 use crate::header::Header;
 use crate::jwk::{AlgorithmParameters, Jwk};
@@ -11,6 +14,7 @@ use crate::jwk::{AlgorithmParameters, Jwk};
 use crate::pem::decoder::PemEncodedKey;
 use crate::serialization::{b64_decode, DecodedJwtPartClaims};
 use crate::validation::{validate, Validation};
+use std::hash::{Hash};
 
 /// The return type of a successful call to [decode](fn.decode.html).
 #[derive(Debug)]
@@ -238,7 +242,6 @@ fn verify_signature<'a>(
 
     if validation.validate_signature
         && header.alg.family() == AlgorithmFamily::Acl
-        && !verify_acl(signature, message.as_bytes(), key, &header)?
     {
         return Err(new_error(ErrorKind::InvalidSignature));
     }
@@ -251,6 +254,30 @@ fn verify_signature<'a>(
     }
 
     Ok((header, payload))
+}
+
+
+// K should satisfy that K1 = K2 iff K1.to_str() == K2.to_str()
+pub fn decode_acl_selective_disclosure<
+    K: ToString+Hash,
+    V: FromStr+Hash+Clone,
+>(
+    token: &str,
+    attribute_keys: &[K],
+    params: &UserParameters,
+) -> Result<TokenData<Vec<(K,V)>>> {
+    // TODO: at some point, we should support the "validation" struct
+
+    let (signature, message) = expect_two!(token.rsplitn(2, '.'));
+    let (payload, header) = expect_two!(message.rsplitn(2, '.'));
+    let header = Header::from_encoded(header)?;
+
+    // step 1 is to verify the ACL signature
+    let sig: Signature = bincode::deserialize(&URL_SAFE_NO_PAD.decode(signature)).unwrap()
+
+    println!("{:?}", token);
+
+    Ok(TokenData{ header: header, claims: Vec::new()} )
 }
 
 /// Decode and validate a JWT

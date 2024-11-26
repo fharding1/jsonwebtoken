@@ -224,7 +224,6 @@ pub struct AclPayload {
     disclosed_blinded_generators: Vec<String>,
     dleq_proof: Vec<String>,
     repr_proof: Vec<String>,
-    sig: String,
 }
 
 #[derive(Debug,Serialize,Deserialize)]
@@ -334,10 +333,9 @@ pub fn encode_acl<
             .collect(),
         dleq_proof: dleq_proof.into_iter().map(|s| URL_SAFE_NO_PAD.encode(s.as_bytes())).collect(),
         repr_proof: repr_proof.into_iter().map(|s| URL_SAFE_NO_PAD.encode(s.as_bytes())).collect(),
-        sig: URL_SAFE_NO_PAD.encode(pretoken.sig.to_bytes()),
     })?;
 
-    let sig = URL_SAFE_NO_PAD.encode(&pretoken.sig.to_bytes());
+    let sig = URL_SAFE_NO_PAD.encode(&bincode::serialize(&pretoken.sig).unwrap());
 
     Ok([encoded_header, encoded_claims, sig].join("."))
 }

@@ -62,12 +62,14 @@ fn verify_ring(
     Ok(res.is_ok())
 }
 
-pub fn verify_acl(
+pub fn verify_acl_selective_disclosure(
     signature: &str,
-    message: &[u8],
+    payload: &[u8],
     key: &DecodingKey,
     header: &Header,
 ) -> Result<bool> {
+    println!("sig: {:?}",signature);
+    println!("payload: {:?}",payload);
     Ok(true)
 }
 
