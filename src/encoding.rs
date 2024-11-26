@@ -8,10 +8,11 @@ use crate::header::Header;
 #[cfg(feature = "use_pem")]
 use crate::pem::decoder::PemEncodedKey;
 use crate::serialization::b64_encode_part;
-use acl::{SignerState, SigningKey, UserParameters, gen_z};
+use acl::{gen_z, Signature, SignerState, SigningKey, UserParameters};
 use curve25519_dalek::ristretto::RistrettoPoint;
 use curve25519_dalek::scalar::Scalar;
 use okamoto::{prove_dleq, prove_linear};
+use std::fmt::Debug;
 
 use rand_core::OsRng;
 use std::hash::{DefaultHasher, Hash, Hasher};
@@ -144,8 +145,17 @@ pub fn encode<T: Serialize>(header: &Header, claims: &T, key: &EncodingKey) -> R
 }
 
 pub trait SignatureProvider {
-    fn prepare(&mut self, commitment: &RistrettoPoint, aux: String) -> Result<Vec<u8>>;
-    fn compute_presignature(&mut self, challenge_bytes: &[u8]) -> Result<Vec<u8>>;
+    type Error;
+
+    fn prepare(
+        &mut self,
+        commitment: &RistrettoPoint,
+        aux: String,
+    ) -> std::result::Result<Vec<u8>, Self::Error>;
+    fn compute_presignature(
+        &mut self,
+        challenge_bytes: &[u8],
+    ) -> std::result::Result<Vec<u8>, Self::Error>;
 }
 
 #[derive(Debug)]
@@ -159,14 +169,23 @@ pub fn new_local_pvd(sk: SigningKey) -> LocalPVD {
 }
 
 impl SignatureProvider for LocalPVD {
-    fn prepare(&mut self, commitment: &RistrettoPoint, _aux: String) -> Result<Vec<u8>> {
+    type Error = crate::errors::Error;
+
+    fn prepare(
+        &mut self,
+        commitment: &RistrettoPoint,
+        _aux: String,
+    ) -> std::result::Result<Vec<u8>, crate::errors::Error> {
         let (ss, output) = self.key.prepare(commitment).expect("todo");
         self.state = Some(ss);
 
         Ok(output)
     }
 
-    fn compute_presignature(&mut self, challenge_bytes: &[u8]) -> Result<Vec<u8>> {
+    fn compute_presignature(
+        &mut self,
+        challenge_bytes: &[u8],
+    ) -> std::result::Result<Vec<u8>, crate::errors::Error> {
         if let Some(state) = &self.state {
             let sig = self.key.compute_presignature(&state, challenge_bytes).expect("todo");
             return Ok(sig);
@@ -202,21 +221,33 @@ pub fn gen_h0() -> &'static RistrettoPoint {
 pub struct AclPayload {
     blinded_commitment: String,
     disclosed_claims: Vec<(String, String)>,
+    disclosed_blinded_generators: Vec<String>,
     dleq_proof: Vec<String>,
     repr_proof: Vec<String>,
+    sig: String,
 }
 
-pub fn encode_acl<K: Eq + Hash + ToString + Clone, V: Hash + Clone + ToString>(
-    header: &Header,
-    claims: &[(K, V)],
-    disclose: &[K],
-    pvd: &mut impl SignatureProvider,
-    params: &UserParameters,
-) -> Result<String> {
-    if header.alg.family() != AlgorithmFamily::Acl {
-        return Err(new_error(ErrorKind::InvalidAlgorithm));
-    }
+#[derive(Debug,Serialize,Deserialize)]
+pub struct PreToken {
+    pub sig: Signature,
+    pub blinded_commitment: RistrettoPoint,
+    pub randomness: Scalar,
+    pub gamma: Scalar,
+    pub rnd: Scalar,
+}
 
+pub fn get_acl_pretoken_full_disclosure<
+    K: Eq + Hash + ToString + Clone,
+    V: Hash + Clone + ToString,
+    S: SignatureProvider,
+>(
+    claims: &[(K, V)],
+    pvd: &mut S,
+    params: &UserParameters,
+) -> Result<PreToken>
+where
+    S::Error: Debug,
+{
     let randomness = Scalar::random(&mut OsRng);
     let commitment = gen_h0() * randomness
         + claims
@@ -224,22 +255,8 @@ pub fn encode_acl<K: Eq + Hash + ToString + Clone, V: Hash + Clone + ToString>(
             .map(|(k, v)| key_to_generator(b"claim", k) * value_to_scalar(b"", v))
             .sum::<RistrettoPoint>();
 
-    let mut aux: String = match header.alg {
-        Algorithm::AclFullPartialR255 => {
-            // need to prove knowledge of discrete log of C - all disclosed attributes times their
-            // generators
-            b64_encode_part(
-                &prove_linear(
-                    &Vec::from([gen_h0().clone()]),
-                    &Vec::from([randomness]),
-                    &Vec::from([gen_h0() * randomness]),
-                )
-                .expect("should work"),
-            )
-            .expect("should encode")
-        }
-        _ => todo!("error"),
-    };
+    // todo: actually do full disclosure
+    let aux: String = "".to_string();
 
     let smsg = pvd.prepare(&commitment, aux).expect("asdf");
     println!("{:?}", smsg);
@@ -248,8 +265,20 @@ pub fn encode_acl<K: Eq + Hash + ToString + Clone, V: Hash + Clone + ToString>(
     let psig = pvd.compute_presignature(&umsg).expect("asdf");
     let (sig, blinded_commitment, gamma, rnd) = params.compute_signature(&st, &psig).expect("asdf");
 
-    // TODO: encode disclosed claims and add proof for selective disclosure
+    Ok(PreToken { sig, blinded_commitment, randomness, gamma, rnd })
+}
 
+pub fn encode_acl<
+    K: Eq + Hash + ToString + Clone,
+    V: Hash + Clone + ToString,
+>(
+    header: &Header,
+    claims: &[(K, V)],
+    disclose: &[K],
+    pretoken: &PreToken,
+) -> Result<String>
+{
+    // TODO: encode disclosed claims and add proof for selective disclosure
     let encoded_header = b64_encode_part(header)?;
 
     let disclosed_claims: Vec<(String, String)> = claims
@@ -259,32 +288,56 @@ pub fn encode_acl<K: Eq + Hash + ToString + Clone, V: Hash + Clone + ToString>(
         .map(|(k, v)| (k.to_string(), v.to_string()))
         .collect();
 
-    let mut generators: Vec<RistrettoPoint> = claims
-        .iter()
-        .cloned()
-        .map(|(k,v)| key_to_generator(b"claim",k))
-        .collect();
+    let mut disclosed_generators: Vec<RistrettoPoint> = Vec::new();
+    let mut disclosed_blinded_generators: Vec<RistrettoPoint> = Vec::new();
+    let mut undisclosed_generators: Vec<RistrettoPoint> = Vec::new();
+    let mut Cminus = pretoken.blinded_commitment;
+    let mut undisclosed_attribute_witnesses: Vec<Scalar> = Vec::new();
 
-    generators.push(gen_z().clone());
+    for (i, (k, v)) in claims.into_iter().enumerate() {
+        let generator = key_to_generator(b"claim", k);
+        if disclose.contains(k) {
+            disclosed_generators.push(generator);
+            disclosed_blinded_generators.push(pretoken.gamma * generator);
+            Cminus = Cminus - value_to_scalar(b"", v) * pretoken.gamma * generator;
+        } else {
+            undisclosed_generators.push(generator);
+            undisclosed_attribute_witnesses.push(pretoken.gamma * value_to_scalar(b"", v));
+        }
+    }
 
-    let mut blinded_generators: Vec<RistrettoPoint> = claims
-        .iter()
-        .cloned()
-        .map(|(k,v)| gamma*key_to_generator(b"claim",k))
-        .collect();
+    let dleq_proof = &prove_dleq(
+        &vec![disclosed_generators, Vec::from([gen_z().clone()])].concat(),
+        &pretoken.gamma,
+        &vec![disclosed_blinded_generators.clone(), Vec::from([pretoken.gamma * gen_z()])].concat(),
+    )
+    .expect("asdf");
 
-    blinded_generators.push(gamma * gen_z());
+    undisclosed_generators.push(RistrettoPoint::mul_base(&Scalar::from(1 as u32)));
+    undisclosed_attribute_witnesses.push(pretoken.gamma * pretoken.rnd);
+    undisclosed_generators.push(gen_h0().clone());
+    undisclosed_attribute_witnesses.push(pretoken.gamma * pretoken.randomness);
 
-    let dleq_proof = &prove_dleq(&generators, &gamma, &blinded_generators).expect("asdf");
+    let repr_proof = prove_linear(
+        &undisclosed_generators,
+        &undisclosed_attribute_witnesses,
+        &Vec::from([Cminus]),
+    )
+    .expect("asdfasdf");
 
     let encoded_claims = b64_encode_part(&AclPayload {
-        blinded_commitment: URL_SAFE_NO_PAD.encode(blinded_commitment.compress().as_bytes()),
+        blinded_commitment: URL_SAFE_NO_PAD.encode(pretoken.blinded_commitment.compress().as_bytes()),
         disclosed_claims: disclosed_claims,
+        disclosed_blinded_generators: disclosed_blinded_generators
+            .into_iter()
+            .map(|p| URL_SAFE_NO_PAD.encode(p.compress().as_bytes()))
+            .collect(),
         dleq_proof: dleq_proof.into_iter().map(|s| URL_SAFE_NO_PAD.encode(s.as_bytes())).collect(),
-        repr_proof: Vec::from(["".to_string()]),
+        repr_proof: repr_proof.into_iter().map(|s| URL_SAFE_NO_PAD.encode(s.as_bytes())).collect(),
+        sig: URL_SAFE_NO_PAD.encode(pretoken.sig.to_bytes()),
     })?;
 
-    let sig = URL_SAFE_NO_PAD.encode(&sig.to_bytes());
+    let sig = URL_SAFE_NO_PAD.encode(&pretoken.sig.to_bytes());
 
     Ok([encoded_header, encoded_claims, sig].join("."))
 }

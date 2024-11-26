@@ -19,6 +19,6 @@ mod validation;
 
 pub use algorithms::Algorithm;
 pub use decoding::{decode, decode_header, DecodingKey, TokenData};
-pub use encoding::{encode, encode_acl, new_local_pvd, EncodingKey, LocalPVD};
+pub use encoding::{encode, encode_acl, new_local_pvd, PreToken, get_acl_pretoken_full_disclosure, EncodingKey, LocalPVD, SignatureProvider};
 pub use header::Header;
 pub use validation::{get_current_timestamp, Validation};
