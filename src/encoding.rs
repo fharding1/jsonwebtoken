@@ -217,13 +217,13 @@ pub fn gen_h0() -> &'static RistrettoPoint {
     GENERATOR_H.get_or_init(|| key_to_generator(b"", "H0"))
 }
 
-#[derive(serde::Serialize, Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Debug,Clone)]
 pub struct AclPayload {
-    blinded_commitment: String,
-    disclosed_claims: Vec<(String, String)>,
-    disclosed_blinded_generators: Vec<String>,
-    dleq_proof: Vec<String>,
-    repr_proof: Vec<String>,
+    pub blinded_commitment: String,
+    pub disclosed_claims: Vec<(String, String)>,
+    pub disclosed_blinded_generators: Vec<String>,
+    pub dleq_proof: Vec<String>,
+    pub repr_proof: Vec<String>,
 }
 
 #[derive(Debug,Serialize,Deserialize)]
@@ -277,7 +277,6 @@ pub fn encode_acl<
     pretoken: &PreToken,
 ) -> Result<String>
 {
-    // TODO: encode disclosed claims and add proof for selective disclosure
     let encoded_header = b64_encode_part(header)?;
 
     let disclosed_claims: Vec<(String, String)> = claims
@@ -296,10 +295,12 @@ pub fn encode_acl<
     for (i, (k, v)) in claims.into_iter().enumerate() {
         let generator = key_to_generator(b"claim", k);
         if disclose.contains(k) {
+            println!("disclosed: {:?}",k.to_string());
             disclosed_generators.push(generator);
             disclosed_blinded_generators.push(pretoken.gamma * generator);
             Cminus = Cminus - value_to_scalar(b"", v) * pretoken.gamma * generator;
         } else {
+            println!("undisclosed: {:?}",k.to_string());
             undisclosed_generators.push(generator);
             undisclosed_attribute_witnesses.push(pretoken.gamma * value_to_scalar(b"", v));
         }
@@ -308,7 +309,7 @@ pub fn encode_acl<
     let dleq_proof = &prove_dleq(
         &vec![disclosed_generators, Vec::from([gen_z().clone()])].concat(),
         &pretoken.gamma,
-        &vec![disclosed_blinded_generators.clone(), Vec::from([pretoken.gamma * gen_z()])].concat(),
+        &vec![disclosed_blinded_generators.clone(), Vec::from([pretoken.sig.xi.clone()])].concat(),
     )
     .expect("asdf");
 
