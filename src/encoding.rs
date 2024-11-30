@@ -12,7 +12,7 @@ use acl::{gen_z, Signature, SignerState, SigningKey, UserParameters};
 use curve25519_dalek::ristretto::RistrettoPoint;
 use curve25519_dalek::scalar::Scalar;
 use okamoto::{prove_dleq, prove_linear};
-use serde_json::{Value,json, Map};
+use serde_json::{json, Map, Value};
 use std::fmt::Debug;
 
 use rand_core::OsRng;
@@ -146,54 +146,18 @@ pub fn encode<T: Serialize>(header: &Header, claims: &T, key: &EncodingKey) -> R
 }
 
 pub trait SignatureProvider {
-    type Error;
+    type Error: std::fmt::Display;
 
     fn prepare(
         &mut self,
         commitment: &RistrettoPoint,
         aux: String,
     ) -> std::result::Result<Vec<u8>, Self::Error>;
+
     fn compute_presignature(
         &mut self,
         challenge_bytes: &[u8],
     ) -> std::result::Result<Vec<u8>, Self::Error>;
-}
-
-#[derive(Debug)]
-pub struct LocalPVD {
-    key: SigningKey,
-    state: Option<SignerState>,
-}
-
-pub fn new_local_pvd(sk: SigningKey) -> LocalPVD {
-    LocalPVD { key: sk, state: None }
-}
-
-impl SignatureProvider for LocalPVD {
-    type Error = crate::errors::Error;
-
-    fn prepare(
-        &mut self,
-        commitment: &RistrettoPoint,
-        _aux: String,
-    ) -> std::result::Result<Vec<u8>, crate::errors::Error> {
-        let (ss, output) = self.key.prepare(commitment).expect("todo");
-        self.state = Some(ss);
-
-        Ok(output)
-    }
-
-    fn compute_presignature(
-        &mut self,
-        challenge_bytes: &[u8],
-    ) -> std::result::Result<Vec<u8>, crate::errors::Error> {
-        if let Some(state) = &self.state {
-            let sig = self.key.compute_presignature(&state, challenge_bytes).expect("todo");
-            return Ok(sig);
-        }
-
-        Err(new_error(ErrorKind::ExpiredSignature)) // todo: this is totally wrong
-    }
 }
 
 pub fn key_to_generator(prefix: &[u8], key: &String) -> RistrettoPoint {
@@ -227,42 +191,55 @@ pub struct PreToken {
     pub rnd: Scalar,
 }
 
+// A "pretoken" is a credential which is required to encode an ACL token.
+// This function takes a set of JSON object "claim_value" which should
+// only contain string, number, and boolean fields. The "signature provider"
+// PVD represents a signer that this function will interact with to produce
+// a pretoken.
 pub fn get_acl_pretoken_full_disclosure<S: SignatureProvider>(
     claim_value: &Value,
     pvd: &mut S,
     params: &UserParameters,
-) -> Result<PreToken>
-where
-    S::Error: Debug,
-{
-    let Value::Object(raw_claims) = claim_value else { panic!("wrong type for claims") };
+) -> Result<PreToken> {
+    let Value::Object(raw_claims) = claim_value else {
+        return Err(new_error(ErrorKind::InvalidClaimsObject));
+    };
 
-    let mut claims: Vec<(String, Value)> = Vec::new();
+    // form a generalized pedersen commitment to all of the attributes in claims, with randomness
+    // randomness
+
+    let randomness = Scalar::random(&mut OsRng);
+    let mut commitment = gen_h0() * randomness;
 
     for (k, v) in raw_claims.iter() {
         if v.is_array() || v.is_object() {
-            panic!("arrays and objects are not supported!")
+            return Err(new_error(ErrorKind::InvalidClaimsObject));
         }
 
-        claims.push((k.to_string(), v.clone()));
+        commitment += key_to_generator(b"claim", &k) * value_to_scalar(b"", &v);
     }
 
-    let randomness = Scalar::random(&mut OsRng);
-    let commitment = gen_h0() * randomness
-        + claims
-            .into_iter()
-            .map(|(k, v)| key_to_generator(b"claim", &k) * value_to_scalar(b"", &v))
-            .sum::<RistrettoPoint>();
+    // for full disclosure, we need to disclose all of the attributes (claims) to the signature
+    // provider, and then prove that we still know how to represent the commitment with all of those
+    // attributes subtracted off
 
     // todo: actually do full disclosure
     let aux: String = "".to_string();
 
-    let smsg = pvd.prepare(&commitment, aux).expect("asdf");
-    println!("{:?}", smsg);
-    let (st, umsg) =
-        params.compute_challenge(&mut OsRng, &commitment, &[0u8; 64], &smsg).expect("asdf");
-    let psig = pvd.compute_presignature(&umsg).expect("asdf");
-    let (sig, blinded_commitment, gamma, rnd) = params.compute_signature(&st, &psig).expect("asdf");
+    // interactively use the ACL BSA scheme to get a blinded commitment and a signature on it
+
+    // need to wrap the error returned by the provider. is there a way to do this nicely with from?
+    let smsg = pvd.prepare(&commitment, aux).map_err(|err| {
+        new_error(ErrorKind::ACLProvider(format!("provider prepare error occured: {}", err)))
+    })?;
+
+    let (st, umsg) = params.compute_challenge(&mut OsRng, &commitment, &[0u8; 64], &smsg)?;
+
+    let psig = pvd.compute_presignature(&umsg).map_err(|err| {
+        new_error(ErrorKind::ACLProvider(format!("provider presignature error occured: {}", err)))
+    })?;
+
+    let (sig, blinded_commitment, gamma, rnd) = params.compute_signature(&st, &psig)?;
 
     Ok(PreToken { sig, blinded_commitment, randomness, gamma, rnd })
 }
@@ -287,7 +264,7 @@ pub fn encode_acl(
         claims.push((k.to_string(), v.clone()));
     }
 
-    claims.sort_by(|a: &(String, Value),b| (&a.0).cmp(&b.0));
+    claims.sort_by(|a: &(String, Value), b| (&a.0).cmp(&b.0));
 
     println!("claims: {:?}", claims);
 
@@ -310,7 +287,7 @@ pub fn encode_acl(
             disclosed_generators.push(generator);
             disclosed_blinded_generators.push(pretoken.gamma * generator);
             Cminus = Cminus - value_to_scalar(b"", v) * pretoken.gamma * generator;
-            println!("{} {}",k,v);
+            println!("{} {}", k, v);
         } else {
             undisclosed_generators.push(generator);
             undisclosed_attribute_witnesses.push(pretoken.gamma * value_to_scalar(b"", v));
@@ -321,8 +298,7 @@ pub fn encode_acl(
         &vec![disclosed_generators, Vec::from([gen_z().clone()])].concat(),
         &pretoken.gamma,
         &vec![disclosed_blinded_generators.clone(), Vec::from([pretoken.sig.xi.clone()])].concat(),
-    )
-    .expect("asdf");
+    )?;
 
     undisclosed_generators.push(RistrettoPoint::mul_base(&Scalar::from(1 as u32)));
     undisclosed_attribute_witnesses.push(pretoken.gamma * pretoken.rnd);
@@ -333,8 +309,7 @@ pub fn encode_acl(
         &undisclosed_generators,
         &undisclosed_attribute_witnesses,
         &Vec::from([Cminus]),
-    )
-    .expect("asdfasdf");
+    )?;
 
     let mut header = partial_header.clone();
 
@@ -358,10 +333,11 @@ pub fn encode_acl(
     let mut disclosed_claims: Map<String, Value> = Map::new();
 
     for k in disclose.iter() {
-        disclosed_claims.insert(k.to_string(), raw_claims.get(k).expect("asdf").clone());
+        let v = raw_claims.get(k).ok_or(new_error(ErrorKind::MissingDisclosedClaim))?;
+        disclosed_claims.insert(k.to_string(), v.clone());
     }
 
-    let encoded_claims = b64_encode_part(&disclosed_claims).expect("fine");
+    let encoded_claims = b64_encode_part(&disclosed_claims)?;
 
     Ok([encoded_header, encoded_claims, sig].join("."))
 }

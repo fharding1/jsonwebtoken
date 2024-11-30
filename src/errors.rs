@@ -3,6 +3,10 @@ use std::fmt;
 use std::result;
 use std::sync::Arc;
 
+use acl::Signature;
+
+use crate::SignatureProvider;
+
 /// A crate private constructor for `Error`.
 pub(crate) fn new_error(kind: ErrorKind) -> Error {
     Error(Box::new(kind))
@@ -69,6 +73,12 @@ pub enum ErrorKind {
     /// When the Validation struct does not contain at least 1 algorithm
     MissingAlgorithm,
 
+    // ACL related errors
+    /// Claims is not an object, or has array or object fields.
+    InvalidClaimsObject,
+    /// User passed a claim that they want to disclose but isn't even present in the claims object
+    MissingDisclosedClaim,
+
     // 3rd party errors
     /// An error happened when decoding some base64 text
     Base64(base64::DecodeError),
@@ -78,6 +88,11 @@ pub enum ErrorKind {
     Utf8(::std::string::FromUtf8Error),
     /// Something unspecified went wrong with crypto
     Crypto(::ring::error::Unspecified),
+    /// Something went wrong with the ACL user side
+    ACLUser(acl::UserError),
+    /// Something went wrong with the ACL signature provider
+    ACLProvider(String),
+    Okamoto(okamoto::ProveError),
 }
 
 impl StdError for Error {
@@ -90,6 +105,7 @@ impl StdError for Error {
             ErrorKind::InvalidRsaKey(_) => None,
             ErrorKind::ExpiredSignature => None,
             ErrorKind::MissingAlgorithm => None,
+            ErrorKind::InvalidClaimsObject => None,
             ErrorKind::MissingRequiredClaim(_) => None,
             ErrorKind::InvalidIssuer => None,
             ErrorKind::InvalidAudience => None,
@@ -102,6 +118,10 @@ impl StdError for Error {
             ErrorKind::Json(err) => Some(err.as_ref()),
             ErrorKind::Utf8(err) => Some(err),
             ErrorKind::Crypto(err) => Some(err),
+            ErrorKind::ACLUser(err) => Some(err),
+            ErrorKind::ACLProvider(err) => None,
+            ErrorKind::Okamoto(err) => Some(err),
+            ErrorKind::MissingDisclosedClaim => None,
         }
     }
 }
@@ -115,12 +135,14 @@ impl fmt::Display for Error {
             | ErrorKind::ExpiredSignature
             | ErrorKind::RsaFailedSigning
             | ErrorKind::MissingAlgorithm
+            | ErrorKind::InvalidClaimsObject
             | ErrorKind::InvalidIssuer
             | ErrorKind::InvalidAudience
             | ErrorKind::InvalidSubject
             | ErrorKind::ImmatureSignature
             | ErrorKind::InvalidAlgorithm
             | ErrorKind::InvalidKeyFormat
+            | ErrorKind::MissingDisclosedClaim
             | ErrorKind::InvalidAlgorithmName => write!(f, "{:?}", self.0),
             ErrorKind::MissingRequiredClaim(c) => write!(f, "Missing required claim: {}", c),
             ErrorKind::InvalidRsaKey(msg) => write!(f, "RSA key invalid: {}", msg),
@@ -128,6 +150,9 @@ impl fmt::Display for Error {
             ErrorKind::Utf8(err) => write!(f, "UTF-8 error: {}", err),
             ErrorKind::Crypto(err) => write!(f, "Crypto error: {}", err),
             ErrorKind::Base64(err) => write!(f, "Base64 error: {}", err),
+            ErrorKind::ACLProvider(err) => write!(f, "Provider error: {}", err),
+            ErrorKind::ACLUser(err) => write!(f, "ACL user error: {}", err),
+            ErrorKind::Okamoto(err) => write!(f, "Okamoto proving error: {}", err),
         }
     }
 }
@@ -168,6 +193,18 @@ impl From<::ring::error::Unspecified> for Error {
 impl From<::ring::error::KeyRejected> for Error {
     fn from(_err: ::ring::error::KeyRejected) -> Error {
         new_error(ErrorKind::InvalidEcdsaKey)
+    }
+}
+
+impl From<acl::UserError> for Error {
+    fn from(err: acl::UserError) -> Error {
+        new_error(ErrorKind::ACLUser(err))
+    }
+}
+
+impl From<okamoto::ProveError> for Error {
+    fn from(err: okamoto::ProveError) -> Error {
+        new_error(ErrorKind::Okamoto(err))
     }
 }
 
