@@ -69,6 +69,11 @@ pub struct Header {
     #[serde(skip_serializing_if = "Option::is_none")]
     #[serde(rename = "x5t#S256")]
     pub x5t_s256: Option<String>,
+
+    pub blinded_commitment: Option<String>,
+    pub disclosed_blinded_generators: Option<Vec<String>>,
+    pub dleq_proof: Option<Vec<String>>,
+    pub repr_proof: Option<Vec<String>>,
 }
 
 impl Header {
@@ -85,6 +90,10 @@ impl Header {
             x5c: None,
             x5t: None,
             x5t_s256: None,
+            blinded_commitment: None,
+            disclosed_blinded_generators: None,
+            dleq_proof: None,
+            repr_proof: None,
         }
     }
 

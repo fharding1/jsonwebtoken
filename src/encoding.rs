@@ -7,11 +7,12 @@ use crate::errors::{new_error, ErrorKind, Result};
 use crate::header::Header;
 #[cfg(feature = "use_pem")]
 use crate::pem::decoder::PemEncodedKey;
-use crate::serialization::b64_encode_part;
+use crate::serialization::{b64_encode, b64_encode_part};
 use acl::{gen_z, Signature, SignerState, SigningKey, UserParameters};
 use curve25519_dalek::ristretto::RistrettoPoint;
 use curve25519_dalek::scalar::Scalar;
 use okamoto::{prove_dleq, prove_linear};
+use serde_json::{Value,json, Map};
 use std::fmt::Debug;
 
 use rand_core::OsRng;
@@ -195,7 +196,7 @@ impl SignatureProvider for LocalPVD {
     }
 }
 
-pub fn key_to_generator<K: Hash>(prefix: &[u8], key: K) -> RistrettoPoint {
+pub fn key_to_generator(prefix: &[u8], key: &String) -> RistrettoPoint {
     let mut hasher = DefaultHasher::new();
     prefix.hash(&mut hasher);
     key.hash(&mut hasher);
@@ -203,10 +204,10 @@ pub fn key_to_generator<K: Hash>(prefix: &[u8], key: K) -> RistrettoPoint {
     RistrettoPoint::mul_base(&Scalar::from(result))
 }
 
-pub fn value_to_scalar<V: Hash>(prefix: &[u8], value: V) -> Scalar {
+pub fn value_to_scalar(prefix: &[u8], value: &Value) -> Scalar {
     let mut hasher = DefaultHasher::new();
     prefix.hash(&mut hasher);
-    value.hash(&mut hasher);
+    value.to_string().hash(&mut hasher);
     let result = hasher.finish();
     Scalar::from(result)
 }
@@ -214,19 +215,10 @@ pub fn value_to_scalar<V: Hash>(prefix: &[u8], value: V) -> Scalar {
 // nothing-up-my-sleeve generation of blinding generator as H0=Hash("H0")
 pub fn gen_h0() -> &'static RistrettoPoint {
     static GENERATOR_H: OnceLock<RistrettoPoint> = OnceLock::new();
-    GENERATOR_H.get_or_init(|| key_to_generator(b"", "H0"))
+    GENERATOR_H.get_or_init(|| key_to_generator(b"", &"H0".to_string()))
 }
 
-#[derive(Serialize, Deserialize, Debug,Clone)]
-pub struct AclPayload {
-    pub blinded_commitment: String,
-    pub disclosed_claims: Vec<(String, String)>,
-    pub disclosed_blinded_generators: Vec<String>,
-    pub dleq_proof: Vec<String>,
-    pub repr_proof: Vec<String>,
-}
-
-#[derive(Debug,Serialize,Deserialize)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct PreToken {
     pub sig: Signature,
     pub blinded_commitment: RistrettoPoint,
@@ -235,23 +227,31 @@ pub struct PreToken {
     pub rnd: Scalar,
 }
 
-pub fn get_acl_pretoken_full_disclosure<
-    K: Eq + Hash + ToString + Clone,
-    V: Hash + Clone + ToString,
-    S: SignatureProvider,
->(
-    claims: &[(K, V)],
+pub fn get_acl_pretoken_full_disclosure<S: SignatureProvider>(
+    claim_value: &Value,
     pvd: &mut S,
     params: &UserParameters,
 ) -> Result<PreToken>
 where
     S::Error: Debug,
 {
+    let Value::Object(raw_claims) = claim_value else { panic!("wrong type for claims") };
+
+    let mut claims: Vec<(String, Value)> = Vec::new();
+
+    for (k, v) in raw_claims.iter() {
+        if v.is_array() || v.is_object() {
+            panic!("arrays and objects are not supported!")
+        }
+
+        claims.push((k.to_string(), v.clone()));
+    }
+
     let randomness = Scalar::random(&mut OsRng);
     let commitment = gen_h0() * randomness
         + claims
             .into_iter()
-            .map(|(k, v)| key_to_generator(b"claim", k) * value_to_scalar(b"", v))
+            .map(|(k, v)| key_to_generator(b"claim", &k) * value_to_scalar(b"", &v))
             .sum::<RistrettoPoint>();
 
     // todo: actually do full disclosure
@@ -267,24 +267,36 @@ where
     Ok(PreToken { sig, blinded_commitment, randomness, gamma, rnd })
 }
 
-pub fn encode_acl<
-    K: Eq + Hash + ToString + Clone,
-    V: Hash + Clone + ToString,
->(
-    header: &Header,
-    claims: &[(K, V)],
-    disclose: &[K],
+pub fn encode_acl(
+    partial_header: &Header,
+    claim_value: &Value,
+    disclose: &[String],
     pretoken: &PreToken,
-) -> Result<String>
-{
-    let encoded_header = b64_encode_part(header)?;
+) -> Result<String> {
+    println!("hello world");
 
-    let disclosed_claims: Vec<(String, String)> = claims
-        .iter()
-        .filter(|(k, v)| disclose.contains(k))
-        .cloned()
-        .map(|(k, v)| (k.to_string(), v.to_string()))
-        .collect();
+    let Value::Object(raw_claims) = claim_value else { panic!("wrong type for claims") };
+
+    let mut claims: Vec<(String, Value)> = Vec::new();
+
+    for (k, v) in raw_claims.iter() {
+        if v.is_array() || v.is_object() {
+            panic!("arrays and objects are not supported!")
+        }
+
+        claims.push((k.to_string(), v.clone()));
+    }
+
+    claims.sort_by(|a: &(String, Value),b| (&a.0).cmp(&b.0));
+
+    println!("claims: {:?}", claims);
+
+    // let disclosed_claims: Vec<(String, String)> = claims
+    //     .iter()
+    //     .filter(|(k, _v)| disclose.contains(k))
+    //     .cloned()
+    //     .map(|(k, v)| (k.to_string(), v.to_string()))
+    //     .collect();
 
     let mut disclosed_generators: Vec<RistrettoPoint> = Vec::new();
     let mut disclosed_blinded_generators: Vec<RistrettoPoint> = Vec::new();
@@ -292,15 +304,14 @@ pub fn encode_acl<
     let mut Cminus = pretoken.blinded_commitment;
     let mut undisclosed_attribute_witnesses: Vec<Scalar> = Vec::new();
 
-    for (i, (k, v)) in claims.into_iter().enumerate() {
+    for (k, v) in claims.iter() {
         let generator = key_to_generator(b"claim", k);
         if disclose.contains(k) {
-            println!("disclosed: {:?}",k.to_string());
             disclosed_generators.push(generator);
             disclosed_blinded_generators.push(pretoken.gamma * generator);
             Cminus = Cminus - value_to_scalar(b"", v) * pretoken.gamma * generator;
+            println!("{} {}",k,v);
         } else {
-            println!("undisclosed: {:?}",k.to_string());
             undisclosed_generators.push(generator);
             undisclosed_attribute_witnesses.push(pretoken.gamma * value_to_scalar(b"", v));
         }
@@ -325,18 +336,32 @@ pub fn encode_acl<
     )
     .expect("asdfasdf");
 
-    let encoded_claims = b64_encode_part(&AclPayload {
-        blinded_commitment: URL_SAFE_NO_PAD.encode(pretoken.blinded_commitment.compress().as_bytes()),
-        disclosed_claims: disclosed_claims,
-        disclosed_blinded_generators: disclosed_blinded_generators
+    let mut header = partial_header.clone();
+
+    header.blinded_commitment =
+        Some(URL_SAFE_NO_PAD.encode(pretoken.blinded_commitment.compress().as_bytes()));
+    header.disclosed_blinded_generators = Some(
+        disclosed_blinded_generators
             .into_iter()
             .map(|p| URL_SAFE_NO_PAD.encode(p.compress().as_bytes()))
             .collect(),
-        dleq_proof: dleq_proof.into_iter().map(|s| URL_SAFE_NO_PAD.encode(s.as_bytes())).collect(),
-        repr_proof: repr_proof.into_iter().map(|s| URL_SAFE_NO_PAD.encode(s.as_bytes())).collect(),
-    })?;
+    );
+    header.dleq_proof =
+        Some(dleq_proof.into_iter().map(|s| URL_SAFE_NO_PAD.encode(s.as_bytes())).collect());
+    header.repr_proof =
+        Some(repr_proof.into_iter().map(|s| URL_SAFE_NO_PAD.encode(s.as_bytes())).collect());
+
+    let encoded_header = b64_encode_part(&header)?;
 
     let sig = URL_SAFE_NO_PAD.encode(&bincode::serialize(&pretoken.sig).unwrap());
+
+    let mut disclosed_claims: Map<String, Value> = Map::new();
+
+    for k in disclose.iter() {
+        disclosed_claims.insert(k.to_string(), raw_claims.get(k).expect("asdf").clone());
+    }
+
+    let encoded_claims = b64_encode_part(&disclosed_claims).expect("fine");
 
     Ok([encoded_header, encoded_claims, sig].join("."))
 }

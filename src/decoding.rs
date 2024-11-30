@@ -8,11 +8,12 @@ use curve25519_dalek::scalar::Scalar;
 use curve25519_dalek::RistrettoPoint;
 use okamoto::{verify_dleq, verify_linear};
 use serde::de::DeserializeOwned;
+use serde_json::{json, Map, Value};
 use std::time::Instant;
 
 use crate::algorithms::AlgorithmFamily;
 use crate::crypto::verify;
-use crate::encoding::{AclPayload,gen_h0};
+use crate::encoding::{gen_h0};
 use crate::encoding::{key_to_generator, value_to_scalar};
 use crate::errors::{new_error, ErrorKind, Result};
 use crate::header::Header;
@@ -261,12 +262,11 @@ fn verify_signature<'a>(
     Ok((header, payload))
 }
 
-// K should satisfy that K1 = K2 iff K1.to_str() == K2.to_str()
-pub fn decode_acl_selective_disclosure<K: ToString + Hash, V: FromStr + Hash + Clone>(
+pub fn decode_acl_selective_disclosure(
     token: &str,
-    attribute_keys: &[K],
+    attribute_keys: &[String],
     params: &UserParameters,
-) -> Result<TokenData<Vec<(K, V)>>> {
+) -> Result<TokenData<Value>> {
     // TODO: at some point, we should support the "validation" struct
 
     let now = Instant::now();
@@ -278,11 +278,13 @@ pub fn decode_acl_selective_disclosure<K: ToString + Hash, V: FromStr + Hash + C
     // step 1 is to verify the ACL signature
     let sig: Signature = bincode::deserialize(&URL_SAFE_NO_PAD.decode(signature).unwrap()).unwrap();
 
-    let payload: AclPayload =
+    let payload: Value =
         serde_json::from_slice(&URL_SAFE_NO_PAD.decode(&raw_payload).unwrap()).unwrap();
 
+    let Some(encoded_blinded_commitment) = header.blinded_commitment.clone() else { panic!() };
+
     let blinded_commitment = CompressedRistretto::from_slice(
-        &URL_SAFE_NO_PAD.decode(payload.blinded_commitment).unwrap(),
+        &URL_SAFE_NO_PAD.decode(encoded_blinded_commitment).unwrap(),
     )
     .unwrap()
     .decompress()
@@ -291,25 +293,50 @@ pub fn decode_acl_selective_disclosure<K: ToString + Hash, V: FromStr + Hash + C
     let verify_result = params.key.verify_prehashed(&[0u8; 64], &blinded_commitment, &sig);
 
     if verify_result.is_err() {
+        println!("verify_result failed");
         return Err(new_error(ErrorKind::InvalidSignature));
     }
 
-    // step 2 is to verify the dleq proof
+    // if there are no attributes disclosed, then there's no need to check the dleq and
+    // repr proofs
 
-    let disclosed_keys: Vec<String> =
-        payload.disclosed_claims.clone().into_iter().map(|(k, _v)| k).collect();
+    if payload.is_null() {
+        return Ok(TokenData { header, claims: json!({}) });
+    }
 
-    let attribute_keys_as_strs: Vec<String> =
-        attribute_keys.into_iter().map(|k| k.to_string()).collect();
+    let Value::Object(disclosed_claims) = payload else { panic!() };
+
+    if disclosed_claims.is_empty() {
+        return Ok(TokenData { header, claims: json!({}) });
+    }
+
+    // step 2). check the dleq proof
+
+    let Some(encoded_dleq_proof) = header.dleq_proof.clone() else { panic!() };
+    let Some(encoded_repr_proof) = header.repr_proof.clone() else { panic!() };
+    let Some(encoded_disclosed_blinded_generators) = header.disclosed_blinded_generators.clone() else {
+        panic!()
+    };
+
+    let mut disclosed_keys: Vec<String> = Vec::new();
+
+    for (k, v) in disclosed_claims.iter() {
+        if v.is_array() || v.is_object() {
+            // todo handle this error
+            panic!();
+        }
+
+        disclosed_keys.push(k.to_string());
+    }
 
     for key in &disclosed_keys {
-        if !attribute_keys_as_strs.contains(&key) {
+        if !attribute_keys.contains(key) {
+            println!("does not contain key: {}", key);
             return Err(new_error(ErrorKind::InvalidSignature));
         }
     }
 
-    let decoded_dleq_proof: Vec<Scalar> = payload
-        .dleq_proof
+    let decoded_dleq_proof: Vec<Scalar> = encoded_dleq_proof
         .into_iter()
         .map(|encoded_scalar| {
             Scalar::from_canonical_bytes(
@@ -320,10 +347,9 @@ pub fn decode_acl_selective_disclosure<K: ToString + Hash, V: FromStr + Hash + C
         .collect();
 
     let disclosed_generators: Vec<RistrettoPoint> =
-        disclosed_keys.clone().into_iter().map(|k| key_to_generator(b"claim", k)).collect();
+        disclosed_keys.clone().into_iter().map(|k| key_to_generator(b"claim", &k)).collect();
 
-    let disclosed_blinded_generators: Vec<RistrettoPoint> = payload
-        .disclosed_blinded_generators
+    let disclosed_blinded_generators: Vec<RistrettoPoint> = encoded_disclosed_blinded_generators
         .into_iter()
         .map(|encoded_point| {
             CompressedRistretto::from_slice(&URL_SAFE_NO_PAD.decode(&encoded_point).unwrap())
@@ -344,25 +370,28 @@ pub fn decode_acl_selective_disclosure<K: ToString + Hash, V: FromStr + Hash + C
     let dleq_result = verify_dleq(&generators, &statement, &decoded_dleq_proof);
 
     if dleq_result.is_err() {
+        println!("dleq failed");
         return Err(new_error(ErrorKind::InvalidSignature));
     }
 
     // last is to verify the representation proof
 
     let undisclosed_generators: Vec<RistrettoPoint> = attribute_keys
-        .into_iter()
-        .filter(|k| !disclosed_keys.contains(&k.to_string()))
+        .iter()
+        .filter(|k| !disclosed_keys.contains(*k))
         .map(|k| key_to_generator(b"claim", k))
         .collect();
 
+    println!("undisclosed generators {:?}", undisclosed_generators.len());
+
     let mut Cminus: RistrettoPoint = blinded_commitment;
 
-    for (i, (_k, v)) in payload.disclosed_claims.into_iter().enumerate() {
+    for (i, (_k, v)) in disclosed_claims.iter().enumerate() {
+        println!("cminus {} {}", _k,v.to_string());
         Cminus = Cminus - disclosed_blinded_generators[i] * value_to_scalar(b"", v);
     }
 
-    let decoded_repr_proof: Vec<Scalar> = payload
-        .repr_proof
+    let decoded_repr_proof: Vec<Scalar> = encoded_repr_proof
         .into_iter()
         .map(|encoded_scalar| {
             Scalar::from_canonical_bytes(
@@ -372,16 +401,24 @@ pub fn decode_acl_selective_disclosure<K: ToString + Hash, V: FromStr + Hash + C
         })
         .collect();
 
-    let repr_result =
-        verify_linear(&vec![undisclosed_generators.clone(), Vec::from([RistrettoPoint::mul_base(&Scalar::from(1 as u32)), gen_h0().clone()])].concat(), &Vec::from([Cminus]), &decoded_repr_proof);
+    let repr_result = verify_linear(
+        &vec![
+            undisclosed_generators.clone(),
+            Vec::from([RistrettoPoint::mul_base(&Scalar::from(1 as u32)), gen_h0().clone()]),
+        ]
+        .concat(),
+        &Vec::from([Cminus]),
+        &decoded_repr_proof,
+    );
 
     if repr_result.is_err() {
+        println!("repr failed");
         return Err(new_error(ErrorKind::InvalidSignature));
     }
 
     println!("verification took: {:?}", now.elapsed());
 
-    Ok(TokenData { header: header, claims: Vec::new() })
+    Ok(TokenData { claims: Value::Object(disclosed_claims.clone()), header })
 }
 
 /// Decode and validate a JWT
