@@ -250,35 +250,30 @@ pub fn encode_acl(
     disclose: &[String],
     pretoken: &PreToken,
 ) -> Result<String> {
-    println!("hello world");
+    let raw_claims = match claim_value {
+        Value::Object(v) => Ok(v),
+        _ => Err(new_error(ErrorKind::InvalidClaimsObject)),
+    }?;
 
-    let Value::Object(raw_claims) = claim_value else { panic!("wrong type for claims") };
+    // convert claims object to a list; this is done for two reasons: 1). we need to sort the claims
+    // by keys for the representation proof, and 2). we want to check that none of the attributes
+    // are an array or object.
 
-    let mut claims: Vec<(String, Value)> = Vec::new();
-
+    let mut claims: Vec<(String, &Value)> = Vec::with_capacity(raw_claims.len());
     for (k, v) in raw_claims.iter() {
         if v.is_array() || v.is_object() {
-            panic!("arrays and objects are not supported!")
+            return Err(new_error(ErrorKind::InvalidClaimsObject));
         }
 
-        claims.push((k.to_string(), v.clone()));
+        claims.push((k.to_string(), &v));
     }
 
-    claims.sort_by(|a: &(String, Value), b| (&a.0).cmp(&b.0));
-
-    println!("claims: {:?}", claims);
-
-    // let disclosed_claims: Vec<(String, String)> = claims
-    //     .iter()
-    //     .filter(|(k, _v)| disclose.contains(k))
-    //     .cloned()
-    //     .map(|(k, v)| (k.to_string(), v.to_string()))
-    //     .collect();
+    claims.sort_by(|a, b| a.0.cmp(&b.0));
 
     let mut disclosed_generators: Vec<RistrettoPoint> = Vec::new();
     let mut disclosed_blinded_generators: Vec<RistrettoPoint> = Vec::new();
     let mut undisclosed_generators: Vec<RistrettoPoint> = Vec::new();
-    let mut Cminus = pretoken.blinded_commitment;
+    let mut c_minus = pretoken.blinded_commitment;
     let mut undisclosed_attribute_witnesses: Vec<Scalar> = Vec::new();
 
     for (k, v) in claims.iter() {
@@ -286,8 +281,7 @@ pub fn encode_acl(
         if disclose.contains(k) {
             disclosed_generators.push(generator);
             disclosed_blinded_generators.push(pretoken.gamma * generator);
-            Cminus = Cminus - value_to_scalar(b"", v) * pretoken.gamma * generator;
-            println!("{} {}", k, v);
+            c_minus = c_minus - value_to_scalar(b"", v) * pretoken.gamma * generator;
         } else {
             undisclosed_generators.push(generator);
             undisclosed_attribute_witnesses.push(pretoken.gamma * value_to_scalar(b"", v));
@@ -308,7 +302,7 @@ pub fn encode_acl(
     let repr_proof = prove_linear(
         &undisclosed_generators,
         &undisclosed_attribute_witnesses,
-        &Vec::from([Cminus]),
+        &Vec::from([c_minus]),
     )?;
 
     let mut header = partial_header.clone();
