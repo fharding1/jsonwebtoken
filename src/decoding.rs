@@ -8,12 +8,13 @@ use curve25519_dalek::scalar::Scalar;
 use curve25519_dalek::RistrettoPoint;
 use okamoto::{verify_dleq, verify_linear};
 use serde::de::DeserializeOwned;
+use serde::{Deserialize, Serialize};
 use serde_json::{json, Map, Value};
 use std::time::Instant;
 
 use crate::algorithms::AlgorithmFamily;
 use crate::crypto::verify;
-use crate::encoding::{gen_h0};
+use crate::encoding::gen_h0;
 use crate::encoding::{key_to_generator, value_to_scalar};
 use crate::errors::{new_error, ErrorKind, Result};
 use crate::header::Header;
@@ -262,6 +263,50 @@ fn verify_signature<'a>(
     Ok((header, payload))
 }
 
+#[derive(Serialize, Deserialize)]
+struct AclToken {
+    header: Header,
+    claims: Value,
+    signature: Signature,
+}
+
+fn decode_point(encoded_point: &String) -> Result<RistrettoPoint> {
+    CompressedRistretto::from_slice(&URL_SAFE_NO_PAD.decode(&encoded_point)?)
+        .map_err(|_| new_error(ErrorKind::MalformedHeader))?
+        .decompress()
+        .ok_or(new_error(ErrorKind::MalformedHeader))
+}
+
+fn decode_points(encoded_points: Vec<String>) -> Result<Vec<RistrettoPoint>> {
+    let mut decoded: Vec<RistrettoPoint> = Vec::with_capacity(encoded_points.len());
+
+    for encoded_point in encoded_points.iter() {
+        decoded.push(decode_point(&encoded_point)?);
+    }
+
+    Ok(decoded)
+}
+
+fn decode_scalars(encoded_scalars: Vec<String>) -> Result<Vec<Scalar>> {
+    let mut decoded: Vec<Scalar> = Vec::with_capacity(encoded_scalars.len());
+
+    for encoded_scalar in encoded_scalars.iter() {
+        let scalar = Scalar::from_canonical_bytes(
+            URL_SAFE_NO_PAD
+                .decode(&encoded_scalar)?
+                .as_slice()
+                .try_into()
+                .map_err(|_| new_error(ErrorKind::MalformedHeader))?,
+        )
+        .into_option()
+        .ok_or(new_error(ErrorKind::MalformedHeader))?;
+
+        decoded.push(scalar);
+    }
+
+    Ok(decoded)
+}
+
 pub fn decode_acl_selective_disclosure(
     token: &str,
     attribute_keys: &[String],
@@ -269,31 +314,23 @@ pub fn decode_acl_selective_disclosure(
 ) -> Result<TokenData<Value>> {
     // TODO: at some point, we should support the "validation" struct
 
-    let now = Instant::now();
-
     let (signature, message) = expect_two!(token.rsplitn(2, '.'));
     let (raw_payload, header) = expect_two!(message.rsplitn(2, '.'));
     let header = Header::from_encoded(header)?;
 
     // step 1 is to verify the ACL signature
-    let sig: Signature = bincode::deserialize(&URL_SAFE_NO_PAD.decode(signature).unwrap()).unwrap();
+    let sig: Signature = bincode::deserialize(&URL_SAFE_NO_PAD.decode(signature)?)?;
 
-    let payload: Value =
-        serde_json::from_slice(&URL_SAFE_NO_PAD.decode(&raw_payload).unwrap()).unwrap();
+    let payload: Value = serde_json::from_slice(&URL_SAFE_NO_PAD.decode(&raw_payload)?)?;
 
-    let Some(encoded_blinded_commitment) = header.blinded_commitment.clone() else { panic!() };
+    let encoded_blinded_commitment =
+        header.blinded_commitment.clone().ok_or(new_error(ErrorKind::MissingDisclosureHeaders))?;
 
-    let blinded_commitment = CompressedRistretto::from_slice(
-        &URL_SAFE_NO_PAD.decode(encoded_blinded_commitment).unwrap(),
-    )
-    .unwrap()
-    .decompress()
-    .unwrap();
+    let blinded_commitment = decode_point(&encoded_blinded_commitment)?;
 
     let verify_result = params.key.verify_prehashed(&[0u8; 64], &blinded_commitment, &sig);
 
     if verify_result.is_err() {
-        println!("verify_result failed");
         return Err(new_error(ErrorKind::InvalidSignature));
     }
 
@@ -304,7 +341,10 @@ pub fn decode_acl_selective_disclosure(
         return Ok(TokenData { header, claims: json!({}) });
     }
 
-    let Value::Object(disclosed_claims) = payload else { panic!() };
+    let disclosed_claims = match payload {
+        Value::Object(v) => Ok(v),
+        _ => Err(new_error(ErrorKind::InvalidClaimsObject)),
+    }?;
 
     if disclosed_claims.is_empty() {
         return Ok(TokenData { header, claims: json!({}) });
@@ -312,57 +352,34 @@ pub fn decode_acl_selective_disclosure(
 
     // step 2). check the dleq proof
 
-    let Some(encoded_dleq_proof) = header.dleq_proof.clone() else { panic!() };
-    let Some(encoded_repr_proof) = header.repr_proof.clone() else { panic!() };
-    let Some(encoded_disclosed_blinded_generators) = header.disclosed_blinded_generators.clone() else {
-        panic!()
-    };
+    let encoded_dleq_proof =
+        header.dleq_proof.clone().ok_or(new_error(ErrorKind::MissingDisclosureHeaders))?;
+    let encoded_repr_proof =
+        header.repr_proof.clone().ok_or(new_error(ErrorKind::MissingDisclosureHeaders))?;
+    let encoded_disclosed_blinded_generators = header
+        .disclosed_blinded_generators
+        .clone()
+        .ok_or(new_error(ErrorKind::MissingDisclosureHeaders))?;
 
-    let mut disclosed_keys: Vec<String> = Vec::new();
+    let mut disclosed_keys: Vec<String> = Vec::with_capacity(disclosed_claims.len());
 
     for (k, v) in disclosed_claims.iter() {
-        if v.is_array() || v.is_object() {
-            // todo handle this error
-            panic!();
+        if v.is_array() || v.is_object() || !attribute_keys.contains(k) {
+            return Err(new_error(ErrorKind::InvalidClaimsObject));
         }
 
         disclosed_keys.push(k.to_string());
     }
 
-    for key in &disclosed_keys {
-        if !attribute_keys.contains(key) {
-            println!("does not contain key: {}", key);
-            return Err(new_error(ErrorKind::InvalidSignature));
-        }
-    }
-
-    let decoded_dleq_proof: Vec<Scalar> = encoded_dleq_proof
-        .into_iter()
-        .map(|encoded_scalar| {
-            Scalar::from_canonical_bytes(
-                URL_SAFE_NO_PAD.decode(&encoded_scalar).unwrap().as_slice().try_into().unwrap(),
-            )
-            .unwrap()
-        })
-        .collect();
+    let decoded_dleq_proof = decode_scalars(encoded_dleq_proof)?;
 
     let disclosed_generators: Vec<RistrettoPoint> =
-        disclosed_keys.clone().into_iter().map(|k| key_to_generator(b"claim", &k)).collect();
+        disclosed_keys.iter().map(|k| key_to_generator(b"claim", &k)).collect();
 
-    let disclosed_blinded_generators: Vec<RistrettoPoint> = encoded_disclosed_blinded_generators
-        .into_iter()
-        .map(|encoded_point| {
-            CompressedRistretto::from_slice(&URL_SAFE_NO_PAD.decode(&encoded_point).unwrap())
-                .unwrap()
-                .decompress()
-                .unwrap()
-        })
-        .collect();
+    let disclosed_blinded_generators = decode_points(encoded_disclosed_blinded_generators)?;
 
     let generators: Vec<RistrettoPoint> =
         vec![disclosed_generators, Vec::from([gen_z().clone()])].concat();
-
-    println!("{:?}", generators.len());
 
     let statement: Vec<RistrettoPoint> =
         vec![disclosed_blinded_generators.clone(), Vec::from([sig.xi.clone()])].concat();
@@ -370,36 +387,28 @@ pub fn decode_acl_selective_disclosure(
     let dleq_result = verify_dleq(&generators, &statement, &decoded_dleq_proof);
 
     if dleq_result.is_err() {
-        println!("dleq failed");
         return Err(new_error(ErrorKind::InvalidSignature));
     }
 
     // last is to verify the representation proof
 
-    let undisclosed_generators: Vec<RistrettoPoint> = attribute_keys
+    let mut sorted_attribute_keys = attribute_keys.to_vec();
+    sorted_attribute_keys.sort();
+
+    let undisclosed_generators: Vec<RistrettoPoint> = sorted_attribute_keys
         .iter()
         .filter(|k| !disclosed_keys.contains(*k))
         .map(|k| key_to_generator(b"claim", k))
         .collect();
 
-    println!("undisclosed generators {:?}", undisclosed_generators.len());
+    let c_minus: RistrettoPoint = blinded_commitment
+        - disclosed_claims
+            .iter()
+            .enumerate()
+            .map(|(i, (_k, v))| disclosed_blinded_generators[i] * value_to_scalar(b"", v))
+            .sum::<RistrettoPoint>();
 
-    let mut Cminus: RistrettoPoint = blinded_commitment;
-
-    for (i, (_k, v)) in disclosed_claims.iter().enumerate() {
-        println!("cminus {} {}", _k,v.to_string());
-        Cminus = Cminus - disclosed_blinded_generators[i] * value_to_scalar(b"", v);
-    }
-
-    let decoded_repr_proof: Vec<Scalar> = encoded_repr_proof
-        .into_iter()
-        .map(|encoded_scalar| {
-            Scalar::from_canonical_bytes(
-                URL_SAFE_NO_PAD.decode(&encoded_scalar).unwrap().as_slice().try_into().unwrap(),
-            )
-            .unwrap()
-        })
-        .collect();
+    let decoded_repr_proof = decode_scalars(encoded_repr_proof)?;
 
     let repr_result = verify_linear(
         &vec![
@@ -407,16 +416,13 @@ pub fn decode_acl_selective_disclosure(
             Vec::from([RistrettoPoint::mul_base(&Scalar::from(1 as u32)), gen_h0().clone()]),
         ]
         .concat(),
-        &Vec::from([Cminus]),
+        &Vec::from([c_minus]),
         &decoded_repr_proof,
     );
 
     if repr_result.is_err() {
-        println!("repr failed");
         return Err(new_error(ErrorKind::InvalidSignature));
     }
-
-    println!("verification took: {:?}", now.elapsed());
 
     Ok(TokenData { claims: Value::Object(disclosed_claims.clone()), header })
 }

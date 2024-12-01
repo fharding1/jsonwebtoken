@@ -4,6 +4,7 @@ use std::result;
 use std::sync::Arc;
 
 use acl::Signature;
+use curve25519_dalek::ristretto;
 
 use crate::SignatureProvider;
 
@@ -78,10 +79,18 @@ pub enum ErrorKind {
     InvalidClaimsObject,
     /// User passed a claim that they want to disclose but isn't even present in the claims object
     MissingDisclosedClaim,
+    /// Some RistrettoPoint was not correctly formatted
+    RistrettoPointFormat,
+    /// Missing selective disclosure header fields
+    MissingDisclosureHeaders,
+    /// E.g. one of the ristretto points in the header does not correctly decode
+    MalformedHeader,
 
     // 3rd party errors
     /// An error happened when decoding some base64 text
     Base64(base64::DecodeError),
+    /// An error happened when doing some binary decoding
+    Bincode(Arc<bincode::Error>),
     /// An error happened while serializing/deserializing JSON
     Json(Arc<serde_json::Error>),
     /// Some of the text was invalid UTF-8
@@ -107,6 +116,8 @@ impl StdError for Error {
             ErrorKind::MissingAlgorithm => None,
             ErrorKind::InvalidClaimsObject => None,
             ErrorKind::MissingRequiredClaim(_) => None,
+            ErrorKind::RistrettoPointFormat => None,
+            ErrorKind::MissingDisclosureHeaders => None,
             ErrorKind::InvalidIssuer => None,
             ErrorKind::InvalidAudience => None,
             ErrorKind::InvalidSubject => None,
@@ -114,7 +125,9 @@ impl StdError for Error {
             ErrorKind::InvalidAlgorithm => None,
             ErrorKind::InvalidAlgorithmName => None,
             ErrorKind::InvalidKeyFormat => None,
+            ErrorKind::MalformedHeader => None,
             ErrorKind::Base64(err) => Some(err),
+            ErrorKind::Bincode(err) => Some(err),
             ErrorKind::Json(err) => Some(err.as_ref()),
             ErrorKind::Utf8(err) => Some(err),
             ErrorKind::Crypto(err) => Some(err),
@@ -136,6 +149,8 @@ impl fmt::Display for Error {
             | ErrorKind::RsaFailedSigning
             | ErrorKind::MissingAlgorithm
             | ErrorKind::InvalidClaimsObject
+            | ErrorKind::RistrettoPointFormat
+            | ErrorKind::MissingDisclosureHeaders
             | ErrorKind::InvalidIssuer
             | ErrorKind::InvalidAudience
             | ErrorKind::InvalidSubject
@@ -143,6 +158,7 @@ impl fmt::Display for Error {
             | ErrorKind::InvalidAlgorithm
             | ErrorKind::InvalidKeyFormat
             | ErrorKind::MissingDisclosedClaim
+            | ErrorKind::MalformedHeader
             | ErrorKind::InvalidAlgorithmName => write!(f, "{:?}", self.0),
             ErrorKind::MissingRequiredClaim(c) => write!(f, "Missing required claim: {}", c),
             ErrorKind::InvalidRsaKey(msg) => write!(f, "RSA key invalid: {}", msg),
@@ -150,6 +166,7 @@ impl fmt::Display for Error {
             ErrorKind::Utf8(err) => write!(f, "UTF-8 error: {}", err),
             ErrorKind::Crypto(err) => write!(f, "Crypto error: {}", err),
             ErrorKind::Base64(err) => write!(f, "Base64 error: {}", err),
+            ErrorKind::Bincode(err) => write!(f, "Bincode error: {}", err),
             ErrorKind::ACLProvider(err) => write!(f, "Provider error: {}", err),
             ErrorKind::ACLUser(err) => write!(f, "ACL user error: {}", err),
             ErrorKind::Okamoto(err) => write!(f, "Okamoto proving error: {}", err),
@@ -169,6 +186,12 @@ impl Eq for ErrorKind {}
 impl From<base64::DecodeError> for Error {
     fn from(err: base64::DecodeError) -> Error {
         new_error(ErrorKind::Base64(err))
+    }
+}
+
+impl From<bincode::Error> for Error {
+    fn from(err: bincode::Error) -> Error {
+        new_error(ErrorKind::Bincode(Arc::new(err)))
     }
 }
 
