@@ -133,7 +133,7 @@ impl StdError for Error {
             ErrorKind::Crypto(err) => Some(err),
             ErrorKind::ACLUser(err) => Some(err),
             ErrorKind::ACLProvider(err) => None,
-            ErrorKind::Okamoto(err) => Some(err),
+            ErrorKind::Okamoto(err) => None,
             ErrorKind::MissingDisclosedClaim => None,
         }
     }
