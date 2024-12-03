@@ -191,6 +191,16 @@ pub struct PreToken {
     pub rnd: Scalar,
 }
 
+#[derive(Serialize, Deserialize)]
+pub struct FullDisclosureProof {
+    pub attributes: Value,
+    pub randomness: String,
+}
+
+fn encode_scalar(s: &Scalar) -> String {
+    URL_SAFE_NO_PAD.encode(s.as_bytes())
+}
+
 // A "pretoken" is a credential which is required to encode an ACL token.
 // This function takes a set of JSON object "claim_value" which should
 // only contain string, number, and boolean fields. The "signature provider"
@@ -216,20 +226,21 @@ pub fn get_acl_pretoken_full_disclosure<S: SignatureProvider>(
             return Err(new_error(ErrorKind::InvalidClaimsObject));
         }
 
-        commitment += key_to_generator(b"claim", &k) * value_to_scalar(b"", &v);
+        let generator = key_to_generator(b"claim", &k);
+        commitment += generator * value_to_scalar(b"", &v);
     }
 
-    // for full disclosure, we need to disclose all of the attributes (claims) to the signature
-    // provider, and then prove that we still know how to represent the commitment with all of those
-    // attributes subtracted off
-
-    // todo: actually do full disclosure
-    let aux: String = "".to_string();
+    // for full disclosure, we just disclose the entire representation, including the randomness, to
+    // the signer
+    let aux = FullDisclosureProof {
+        attributes: raw_claims.iter().map(|(k, v)| (k.clone(), v.clone())).collect(),
+        randomness: encode_scalar(&randomness),
+    };
+    let encoded_aux = serde_json::to_string(&aux)?;
 
     // interactively use the ACL BSA scheme to get a blinded commitment and a signature on it
 
-    // need to wrap the error returned by the provider. is there a way to do this nicely with from?
-    let smsg = pvd.prepare(&commitment, aux).map_err(|err| {
+    let smsg = pvd.prepare(&commitment, encoded_aux).map_err(|err| {
         new_error(ErrorKind::ACLProvider(format!("provider prepare error occured: {}", err)))
     })?;
 
