@@ -331,6 +331,7 @@ pub fn decode_acl_selective_disclosure(
     let verify_result = params.key.verify_prehashed(&[0u8; 64], &blinded_commitment, &sig);
 
     if verify_result.is_err() {
+        println!("verify result invalid");
         return Err(new_error(ErrorKind::InvalidSignature));
     }
 
@@ -387,6 +388,7 @@ pub fn decode_acl_selective_disclosure(
     let dleq_result = verify_dleq(&generators, &statement, &decoded_dleq_proof);
 
     if dleq_result.is_err() {
+        println!("dleq result invalid");
         return Err(new_error(ErrorKind::InvalidSignature));
     }
 
@@ -421,6 +423,7 @@ pub fn decode_acl_selective_disclosure(
     );
 
     if repr_result.is_err() {
+        println!("repr result invalid");
         return Err(new_error(ErrorKind::InvalidSignature));
     }
 

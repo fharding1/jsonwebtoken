@@ -62,5 +62,9 @@ use_pem = ["pem", "simple_asn1"]
 name = "jwt"
 harness = false
 
+[[bench]]
+name = "acl"
+harness = false
+
 [badges]
 maintenance = { status = "passively-maintained" }
