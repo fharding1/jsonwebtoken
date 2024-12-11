@@ -8,12 +8,27 @@ struct Claims {
     company: String,
 }
 
+const PRIVATE_KEY: &str = r#"
+-----BEGIN PRIVATE KEY-----
+MC4CAQAwBQYDK2VwBCIEIOd2KxbRr/R65Sxjkie6kkXNz7Z6k/Dw4J+W6Gy9IR6i
+-----END PRIVATE KEY-----
+"#;
+
+fn bench_encode_eddsa(c: &mut Criterion) {
+    let claim = Claims { sub: "b@b.com".to_owned(), company: "ACME".to_owned() };
+    let key = EncodingKey::from_ed_pem(PRIVATE_KEY.as_bytes()).unwrap();
+
+    c.bench_function("bench_encode_eddsa", |b| {
+        b.iter(|| black_box(encode(black_box(&Header::new(Algorithm::EdDSA)), black_box(&claim), black_box(&key))))
+    });
+}
+
 fn bench_encode(c: &mut Criterion) {
     let claim = Claims { sub: "b@b.com".to_owned(), company: "ACME".to_owned() };
     let key = EncodingKey::from_secret("secret".as_ref());
 
     c.bench_function("bench_encode", |b| {
-        b.iter(|| encode(black_box(&Header::default()), black_box(&claim), black_box(&key)))
+        b.iter(|| black_box(encode(black_box(&Header::default()), black_box(&claim), black_box(&key))))
     });
 }
 
@@ -32,5 +47,5 @@ fn bench_decode(c: &mut Criterion) {
     });
 }
 
-criterion_group!(benches, bench_encode, bench_decode);
+criterion_group!(benches, bench_encode, bench_encode_eddsa, bench_decode);
 criterion_main!(benches);

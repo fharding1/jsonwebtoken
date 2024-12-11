@@ -3,7 +3,7 @@ use jsonwebtoken::{SignatureProvider,get_acl_pretoken_full_disclosure,Algorithm,
 use acl::{SigningKey,SignerState,VerifyingKey,UserParameters,SECRET_KEY_LENGTH};
 use serde::{Deserialize, Serialize};
 use curve25519_dalek::ristretto::RistrettoPoint;
-use serde_json::{Value,json};
+use serde_json::{Value,json,Map};
 
 #[derive(Debug)]
 pub struct LocalPVD {
@@ -43,23 +43,15 @@ impl SignatureProvider for LocalPVD {
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
-struct TokenData {
-    email: String,
-    exp: u64,
-    tech_subscriber: bool,
-    sports_subscriber: bool,
-    cooking_subscriber: bool,
-}
+struct TokenData {}
 
 impl TokenData {
-    fn to_claims(&self) -> Value {
-        json!({
-            "cooking_subscriber": self.cooking_subscriber,
-            "email": self.email,
-            "exp": self.exp as u32,
-            "sports_subscriber": self.sports_subscriber,
-            "tech_subscriber": self.tech_subscriber,
-        })
+    fn to_claims(&self, n: u32) -> Value {
+        let mut v = Map::new();
+        for i in 0..n {
+            v.insert(i.to_string(), Value::String(i.to_string()));
+        }
+        Value::Object(v)
     }
 }
 
@@ -76,17 +68,11 @@ fn bench_get_acl_pretoken_full_disclosure(c: &mut Criterion) {
 
     let user_params = UserParameters { key: VerifyingKey::from(&signing_key) };
 
-    let tkd = &TokenData{
-        email: "fharding1@protonmail.com".to_string(),
-        exp: 1733255063,
-        tech_subscriber: true,
-        sports_subscriber: true,
-        cooking_subscriber: true,
-    };
+    let tkd = &TokenData{};
 
     c.bench_function("bench_get_acl_pretoken_full_disclosure", |b| {
         b.iter(|| {
-            let token = black_box(get_acl_pretoken_full_disclosure(black_box(&tkd.to_claims()), black_box(&mut localPVD), black_box(&user_params)).expect("OK"));
+            let token = black_box(get_acl_pretoken_full_disclosure(black_box(&tkd.to_claims(10)), black_box(&mut localPVD), black_box(&user_params)).expect("OK"));
         });
     });
 }
@@ -103,22 +89,16 @@ fn bench_encode_acl(c: &mut Criterion) {
 
     let user_params = UserParameters { key: VerifyingKey::from(&signing_key) };
 
-    let tkd = &TokenData{
-        email: "fharding1@protonmail.com".to_string(),
-        exp: 1733255063,
-        tech_subscriber: true,
-        sports_subscriber: true,
-        cooking_subscriber: true,
-    };
+    let tkd = &TokenData{};
 
-    let pretoken = get_acl_pretoken_full_disclosure(black_box(&tkd.to_claims()), black_box(&mut localPVD), black_box(&user_params)).expect("OK");
+    let pretoken = get_acl_pretoken_full_disclosure(black_box(&tkd.to_claims(10)), black_box(&mut localPVD), black_box(&user_params)).expect("OK");
 
     c.bench_function("bench_encode_acl", |b| {
         b.iter(|| {
             let token = black_box(encode_acl(
                 black_box(&Header::new(Algorithm::AclFullPartialR255)),
-                black_box(&tkd.to_claims()),
-                black_box(&Vec::from(["exp".to_string(), "tech_subscriber".to_string()])),
+                black_box(&tkd.to_claims(10)),
+                black_box(&Vec::from(["1".to_string(), "2".to_string()])),
                 black_box(&pretoken),
             ));
         });
