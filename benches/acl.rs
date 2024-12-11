@@ -1,4 +1,4 @@
-use criterion::{black_box, criterion_group, criterion_main, Criterion};
+use criterion::{black_box, criterion_group, criterion_main, Criterion,BenchmarkId};
 use jsonwebtoken::{SignatureProvider,get_acl_pretoken_full_disclosure,Algorithm,Header,encode_acl};
 use acl::{SigningKey,SignerState,VerifyingKey,UserParameters,SECRET_KEY_LENGTH};
 use serde::{Deserialize, Serialize};
@@ -70,11 +70,15 @@ fn bench_get_acl_pretoken_full_disclosure(c: &mut Criterion) {
 
     let tkd = &TokenData{};
 
-    c.bench_function("bench_get_acl_pretoken_full_disclosure", |b| {
-        b.iter(|| {
-            let token = black_box(get_acl_pretoken_full_disclosure(black_box(&tkd.to_claims(10)), black_box(&mut localPVD), black_box(&user_params)).expect("OK"));
+    let mut group = c.benchmark_group("bench_get_acl_pretoken_full_disclosure");
+    for n in (0..11).map(|v| 1 << v) {
+        group.bench_with_input(BenchmarkId::from_parameter(n), &n, |b, &n| {
+            b.iter(|| {
+                let token = black_box(get_acl_pretoken_full_disclosure(black_box(&tkd.to_claims(n)), black_box(&mut localPVD), black_box(&user_params)).expect("OK"));
+            });
         });
-    });
+    }
+    group.finish();
 }
 
 fn bench_encode_acl(c: &mut Criterion) {
@@ -91,18 +95,32 @@ fn bench_encode_acl(c: &mut Criterion) {
 
     let tkd = &TokenData{};
 
-    let pretoken = get_acl_pretoken_full_disclosure(black_box(&tkd.to_claims(10)), black_box(&mut localPVD), black_box(&user_params)).expect("OK");
 
-    c.bench_function("bench_encode_acl", |b| {
-        b.iter(|| {
-            let token = black_box(encode_acl(
-                black_box(&Header::new(Algorithm::AclFullPartialR255)),
-                black_box(&tkd.to_claims(10)),
-                black_box(&Vec::from(["1".to_string(), "2".to_string()])),
-                black_box(&pretoken),
+    let mut group = c.benchmark_group("bench_encode_acl");
+    for n in (0..5).map(|v| 1 << v*2) {
+        for d in [&Vec::from([0 as u32])[..], &Vec::from((0..11).map(|v| 1 << v).collect::<Vec<u32>>())[..]].concat() {
+            if d > n {
+                continue
+            }
+
+    let mut disclose: Vec<String> = (1..d+1).map(|v| v.to_string()).collect();
+    if d == 0 {
+        disclose = Vec::new()
+    }
+
+    let pretoken = get_acl_pretoken_full_disclosure(black_box(&tkd.to_claims(n)), black_box(&mut localPVD), black_box(&user_params)).expect("OK");
+        group.bench_with_input(BenchmarkId::from_parameter(format!("{}/{}", d,n)), &(n,d), |b, &(n,d)| {
+            b.iter(|| {
+                let token = black_box(encode_acl(
+                    black_box(&Header::new(Algorithm::AclFullPartialR255)),
+                    black_box(&tkd.to_claims(n)),
+                    black_box(&disclose),
+                    black_box(&pretoken),
             ));
         });
     });
+        }
+    }
 }
 
 criterion_group!(benches, bench_encode_acl, bench_get_acl_pretoken_full_disclosure);
